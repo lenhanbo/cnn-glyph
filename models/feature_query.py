@@ -103,7 +103,12 @@ class SpatialAttentionPool(nn.Module):
             d_model=channels, nhead=heads, dim_feedforward=channels * 4,
             dropout=dropout, activation="gelu", batch_first=True, norm_first=True,
         )
-        self.attention = nn.TransformerEncoder(layer, num_layers=layers)
+        # Pre-norm is intentional. PyTorch cannot use its nested-tensor fast
+        # path with norm_first=True, so disable that optional path explicitly
+        # instead of emitting a warning on every construction.
+        self.attention = nn.TransformerEncoder(
+            layer, num_layers=layers, enable_nested_tensor=False
+        )
         self.norm = nn.LayerNorm(channels)
 
     def forward(self, maps: torch.Tensor) -> torch.Tensor:
