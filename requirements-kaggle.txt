@@ -1,9 +1,6 @@
-# Kaggle already supplies matching torch and torchvision builds; do not reinstall them.
-wandb==0.14.0
-opencv-python==4.7.0.72
-scipy==1.10.1
-PyYAML==6.0
-appdirs==1.4.4
-six==1.16.0
-psutil==5.9.5
-pytest>=7,<9
+# Kaggle supplies torch, torchvision, numpy, Pillow, and usually all packages
+# below. These unpinned lower bounds also support current Python 3.13 images.
+# The setup script installs only packages whose import is actually missing.
+PyYAML>=6.0
+opencv-python-headless>=4.10
+pytest>=7

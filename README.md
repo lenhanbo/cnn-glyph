@@ -96,6 +96,10 @@ python train_feature_map.py --config configs/kaggle.yaml --preflight-only
 python train_feature_map.py --config configs/kaggle.yaml --mode auto
 ```
 
+The setup reuses Kaggle's installed scientific stack and only invokes pip for a
+missing import. In particular, it does not pin the old `scipy==1.10.1`, which is
+incompatible with current Python 3.13 Kaggle images and is not needed by the training runner.
+
 For a fresh Kaggle notebook, attach a raw `iam_dataset` containing `words/`,
 `train_gt.txt`, and `val_gt.txt` (or the legacy `IAM-32.pickle`), enable a T4/P100
 accelerator, then clone this GitHub repository or import `kaggle_notebook.ipynb`
