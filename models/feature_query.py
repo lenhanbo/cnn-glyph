@@ -170,11 +170,19 @@ class FeatureMapQuery(nn.Module):
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         self._validate_ids(ids)
         flat = ids.reshape(-1)
-        output = self.projection.weight.new_zeros(flat.numel(), self.projection.out_features)
+        output = None
         valid_positions = torch.nonzero(flat != 0, as_tuple=False).flatten()
         for positions in valid_positions.split(self.chunk_size):
             maps = self._maps_for_ids(flat[positions])
-            output[positions] = self.projection(self.spatial(maps))
+            embeddings = self.projection(self.spatial(maps))
+            if output is None:
+                # Under AMP embeddings are FP16/BF16 while projection weights
+                # remain FP32. Build padding/output in the computed dtype so
+                # index_copy is valid and the query stays on the AMP path.
+                output = embeddings.new_zeros(flat.numel(), self.projection.out_features)
+            output = output.index_copy(0, positions, embeddings)
+        if output is None:  # an all-padding query has no computed chunk
+            output = self.projection.weight.new_zeros(flat.numel(), self.projection.out_features)
         return output.view(*ids.shape, -1)
 
     @torch.no_grad()

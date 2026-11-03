@@ -80,3 +80,15 @@ def test_out_of_vocabulary_is_an_error():
         pass
     else:
         raise AssertionError("out-of-vocabulary ID did not raise")
+
+
+def test_amp_output_uses_computed_dtype_and_keeps_gradients():
+    module = FeatureMapQuery(mode="stage2")
+    ids = torch.tensor([[0, 1, 2, 0]])
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        output = module(ids)
+        loss = output.float().sum()
+    assert output.dtype == torch.bfloat16
+    assert torch.count_nonzero(output[:, [0, 3]]) == 0
+    loss.backward()
+    assert module.feature_maps.grad is not None
