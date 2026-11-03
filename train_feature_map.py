@@ -150,15 +150,47 @@ def main() -> None:
     parser.add_argument("--mode", choices=["reference_baseline", "auto", "stage1", "stage2"])
     parser.add_argument("--resume", nargs="?", const="auto")
     parser.add_argument("--stage1-checkpoint")
+    parser.add_argument("--dataset-path", help="Raw iam_dataset directory or IAM-32.pickle")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--switch-epoch", type=int)
+    parser.add_argument("--num-examples", type=int)
+    parser.add_argument("--num-workers", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--lr", type=float, help="Set G, D, OCR and writer learning rates together")
+    parser.add_argument("--save-every", type=int)
+    parser.add_argument("--glyph-chunk-size", type=int)
+    parser.add_argument("--device")
+    parser.add_argument("--raw-group-by", choices=["form", "writer"])
+    parser.add_argument("--forms-path", help="Official IAM forms.txt; required with raw-group-by=writer")
+    parser.add_argument("--feat-model-path")
+    parser.add_argument("--pretrained-style-encoder", action="store_true")
+    parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
     cli = parser.parse_args()
     cfg = yaml.safe_load(Path(cli.config).read_text(encoding="utf-8"))
-    cfg = resolve_paths(cfg)
     if cli.mode:
         cfg["mode"] = cli.mode
+    override_names = (
+        "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples",
+        "num_workers", "seed", "save_every", "glyph_chunk_size", "device", "raw_group_by",
+        "forms_path", "feat_model_path",
+    )
+    for name in override_names:
+        value = getattr(cli, name)
+        if value is not None:
+            cfg[name] = value
+    if cli.lr is not None:
+        cfg.update(g_lr=cli.lr, d_lr=cli.lr, w_lr=cli.lr, ocr_lr=cli.lr)
+    if cli.pretrained_style_encoder:
+        cfg["use_pretrained_style_encoder"] = True
+    if cli.no_amp:
+        cfg["amp"] = False
     if cli.smoke:
         cfg.update(epochs=1, max_batches_per_epoch=1, save_every=1)
+    cfg = resolve_paths(cfg)
     cfg["device"] = cfg.get("device", "cuda")
     preflight(cfg)
     if cli.preflight_only:

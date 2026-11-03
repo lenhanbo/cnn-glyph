@@ -124,6 +124,21 @@ python train_feature_map.py --config configs/kaggle.yaml --resume
 python train_feature_map.py --config configs/kaggle.yaml --smoke
 ```
 
+All common settings can be overridden at launch without editing YAML. For example:
+
+```console
+bash scripts/kaggle_setup.sh --dataset-path /kaggle/input/my-iam/iam_dataset
+bash scripts/kaggle_run.sh smoke --dataset-path /kaggle/input/my-iam/iam_dataset --batch-size 4
+bash scripts/kaggle_run.sh auto --dataset-path /kaggle/input/my-iam/iam_dataset \
+  --batch-size 8 --epochs 7000 --switch-epoch 3500 --lr 0.00005 \
+  --num-workers 2 --output-dir /kaggle/working/vatr-feature-map
+```
+
+Other runtime flags include `--seed`, `--num-examples`, `--save-every`,
+`--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`, and
+`--pretrained-style-encoder --feat-model-path PATH`. Command-line values take
+priority over `configs/kaggle.yaml`.
+
 If paths are null in the YAML, the runner requires exactly one raw IAM directory or one
 `IAM-32.pickle` below `/kaggle/input`. ResNet-18 starts from scratch by default; set
 `use_pretrained_style_encoder: true` to require and load `resnet_18_pretrained.pth`.
