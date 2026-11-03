@@ -20,6 +20,12 @@ from PIL import Image
 from datetime import timedelta
 
 
+def ctc_loss_fp32(criterion, predictions, targets, input_lengths, target_lengths):
+    """Run CTC in FP32 because CUDA's CTC kernel has no FP16 implementation."""
+    with torch.autocast(device_type=predictions.device.type, enabled=False):
+        return criterion(predictions.float(), targets, input_lengths, target_lengths)
+
+
 def get_rgb(x):
     R = 255 - int(int(x > 0.5) * 255 * (x - 0.5) / 0.5)
     G = 0
@@ -725,8 +731,8 @@ class VATr(nn.Module):
         if not self.args.no_ocr_loss:
             self.pred_real_OCR = self.netOCR(self.real.detach())
             preds_size = torch.IntTensor([self.pred_real_OCR.size(0)] * self.args.batch_size).detach()
-            loss_OCR_real = self.OCR_criterion(self.pred_real_OCR, self.text_encode.detach(), preds_size,
-                                               self.len_text.detach())
+            loss_OCR_real = ctc_loss_fp32(self.OCR_criterion, self.pred_real_OCR,
+                                          self.text_encode.detach(), preds_size, self.len_text.detach())
             self.loss_OCR_real = torch.mean(loss_OCR_real[~torch.isnan(loss_OCR_real)])
 
             loss_total = self.loss_D + self.loss_OCR_real
@@ -796,8 +802,8 @@ class VATr(nn.Module):
         # OCR loss on real data
         self.pred_real_OCR = self.netOCR(self.real.detach())
         preds_size = torch.IntTensor([self.pred_real_OCR.size(0)] * self.opt.self.args.batch_size).detach()
-        loss_OCR_real = self.OCR_criterion(self.pred_real_OCR, self.text_encode.detach(), preds_size,
-                                           self.len_text.detach())
+        loss_OCR_real = ctc_loss_fp32(self.OCR_criterion, self.pred_real_OCR,
+                                      self.text_encode.detach(), preds_size, self.len_text.detach())
         self.loss_OCR_real = torch.mean(loss_OCR_real[~torch.isnan(loss_OCR_real)])
         # total loss
         self.loss_w_real = self.netW(self.real.detach(), self.wcl)
@@ -822,8 +828,8 @@ class VATr(nn.Module):
         # OCR loss on real data
         self.pred_real_OCR = self.netOCR(self.real.detach())
         preds_size = torch.IntTensor([self.pred_real_OCR.size(0)] * self.opt.self.args.batch_size).detach()
-        loss_OCR_real = self.OCR_criterion(self.pred_real_OCR, self.text_encode.detach(), preds_size,
-                                           self.len_text.detach())
+        loss_OCR_real = ctc_loss_fp32(self.OCR_criterion, self.pred_real_OCR,
+                                      self.text_encode.detach(), preds_size, self.len_text.detach())
         self.loss_OCR_real = torch.mean(loss_OCR_real[~torch.isnan(loss_OCR_real)])
 
         # backward
@@ -870,8 +876,9 @@ class VATr(nn.Module):
         if not self.args.no_ocr_loss:
             pred_fake_OCR = self.netOCR(self.fake)
             preds_size = torch.IntTensor([pred_fake_OCR.size(0)] * self.args.batch_size).detach()
-            loss_OCR_fake = self.OCR_criterion(pred_fake_OCR, self.text_encode_fake.detach(), preds_size,
-                                               self.len_text_fake.detach())
+            loss_OCR_fake = ctc_loss_fp32(self.OCR_criterion, pred_fake_OCR,
+                                          self.text_encode_fake.detach(), preds_size,
+                                          self.len_text_fake.detach())
             self.loss_OCR_fake = torch.mean(loss_OCR_fake[~torch.isnan(loss_OCR_fake)])
 
         self.loss_G = self.loss_G + self.Lcycle + self.lda1 + self.lda2 - self.KLD
@@ -974,8 +981,9 @@ class VATr(nn.Module):
 
         pred_fake_OCR = self.netOCR(self.fake)
         preds_size = torch.IntTensor([pred_fake_OCR.size(0)] * self.opt.self.args.batch_size).detach()
-        loss_OCR_fake = self.OCR_criterion(pred_fake_OCR, self.text_encode_fake.detach(), preds_size,
-                                           self.len_text_fake.detach())
+        loss_OCR_fake = ctc_loss_fp32(self.OCR_criterion, pred_fake_OCR,
+                                      self.text_encode_fake.detach(), preds_size,
+                                      self.len_text_fake.detach())
         self.loss_OCR_fake = torch.mean(loss_OCR_fake[~torch.isnan(loss_OCR_fake)])
 
         self.loss_w_fake = self.netW(self.fake, self.wcl)
@@ -1121,8 +1129,9 @@ class VATr(nn.Module):
         # OCR loss on real data
         pred_real_OCR = self.netOCR(self.real)
         preds_size = torch.IntTensor([pred_real_OCR.size(0)] * self.opt.self.args.batch_size).detach()
-        self.loss_OCR_real = self.OCR_criterion(pred_real_OCR, self.text_encode.detach(), preds_size,
-                                                self.len_text.detach())
+        self.loss_OCR_real = ctc_loss_fp32(self.OCR_criterion, pred_real_OCR,
+                                           self.text_encode.detach(), preds_size,
+                                           self.len_text.detach())
         self.loss_OCR_real.backward()
         self.optimizer_OCR.step()
 

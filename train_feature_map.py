@@ -213,7 +213,11 @@ def main() -> None:
         initial_mode = "stage1"
     args = Args(cfg, train_set.num_writers, initial_mode)
     model = VATr(args)
-    scaler = torch.cuda.amp.GradScaler(enabled=bool(cfg.get("amp", True) and cfg["device"].startswith("cuda")))
+    amp_enabled = bool(cfg.get("amp", True) and cfg["device"].startswith("cuda"))
+    try:
+        scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+    except (AttributeError, TypeError):  # compatibility with the original PyTorch 1.13 environment
+        scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
     scheduler = torch.optim.lr_scheduler.LambdaLR(model.optimizer_G, lambda _: 1.0)
     start_epoch = global_step = 0
     if resume_header is not None:
