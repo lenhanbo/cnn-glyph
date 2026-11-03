@@ -6,6 +6,8 @@ from data.dataset import FolderDataset
 import numpy as np
 import cv2
 from pathlib import Path
+from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
+from models.stage_manager import load_checkpoint_file
 
 def load_checkpoint(model, checkpoint):
     if not isinstance(checkpoint, collections.OrderedDict):
@@ -77,8 +79,11 @@ class FakeArgs:
 
 class VATr_writer:
     def __init__(self, checkpoint_path, args=FakeArgs()):
+        checkpoint = load_checkpoint_file(checkpoint_path, map_location=args.device)
+        state = checkpoint.get('model', checkpoint) if not isinstance(checkpoint, collections.OrderedDict) else checkpoint
+        if any(key.endswith('query_embed.feature_maps') for key in state):
+            args.feature_mode = 'stage2'
         self.model = VATr(args)
-        checkpoint = torch.load(checkpoint_path, map_location=args.device)
         load_checkpoint(self.model, checkpoint)
         self.model.eval()
         self.style_dataset = None
@@ -108,6 +113,15 @@ class VATr_writer:
             fake = (fake * 255).astype(np.uint8)
             fakes.append(fake)
         return fakes
+
+
+# Fix historical source-encoding mojibake while preserving the public FakeArgs API.
+FakeArgs.alphabet = IAM_ALPHABET
+FakeArgs.special_alphabet = SPECIAL_ALPHABET
+FakeArgs.vocab_size = len(IAM_ALPHABET)
+FakeArgs.feature_mode = 'reference_baseline'
+FakeArgs.unifont_path = 'files/unifont.pickle'
+FakeArgs.glyph_chunk_size = 128
 
 
 if __name__ == '__main__':

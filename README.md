@@ -73,3 +73,63 @@ Output for `That's one small step for man, one giant leap for mankind ΑαΒβΓ
 
 ### Implementation details
 This work is partially based on the code released for [Handwriting-Transformers](https://github.com/ankanbhunia/Handwriting-Transformers)
+
+## Two-stage 32x32 GNU feature maps
+
+This fork keeps the official VATr generator, ResNet-18 style encoder, Transformer decoder,
+image decoder, GAN, OCR loss, and writer loss. Only the character-query backend changes:
+
+1. `stage1`: fixed GNU glyphs are resized 16x16 -> 32x32 with exact nearest-neighbour
+   replication, encoded to `[64,8,8]` by a GroupNorm CNN, then spatially attended.
+2. `stage2`: the 129 CNN outputs are materialized and optimized directly as a
+   `[130,64,8,8]` table. Padding row 0 remains zero. A stage-2 checkpoint contains no
+   glyph bitmap or CNN and can be loaded without `unifont.pickle`.
+
+`reference_baseline` retains the official `16x16 -> flatten -> Linear` module and old
+checkpoint parameter names. The vocabulary is immutable and recorded in `vocab.json`.
+
+Kaggle (T4/P100) setup does not reinstall torch or torchvision:
+
+```console
+pip install -r requirements-kaggle.txt
+python train_feature_map.py --config configs/kaggle.yaml --preflight-only
+python train_feature_map.py --config configs/kaggle.yaml --mode auto
+```
+
+For a fresh Kaggle notebook, first upload the ZIP made by
+`powershell -File scripts/package_source.ps1`, attach IAM-32 and the pretrained ResNet
+as Kaggle datasets, enable a T4/P100 accelerator, then import `kaggle_notebook.ipynb`
+or run these equivalent cells:
+
+```bash
+!unzip -q /kaggle/input/<source-dataset>/vatr-feature-map-source.zip -d /kaggle/working/VATr-FeatureMap
+%cd /kaggle/working/VATr-FeatureMap
+!bash scripts/kaggle_setup.sh
+!bash scripts/kaggle_run.sh smoke
+!bash scripts/kaggle_run.sh auto
+```
+
+After a notebook restart, extract the source again and use
+`!bash scripts/kaggle_run.sh resume`. Persist `/kaggle/working/vatr-feature-map/latest.pth`
+as a Kaggle output/version before the session ends. The setup fails early if CUDA is
+disabled or if input discovery finds zero/multiple matching files.
+
+The same runner supports all requested workflows:
+
+```console
+python train_feature_map.py --config configs/kaggle.yaml --mode reference_baseline
+python train_feature_map.py --config configs/kaggle.yaml --mode stage1
+python train_feature_map.py --config configs/kaggle.yaml --mode stage2 --stage1-checkpoint /path/stage1.pth
+python train_feature_map.py --config configs/kaggle.yaml --resume
+python train_feature_map.py --config configs/kaggle.yaml --smoke
+```
+
+If paths are null in the YAML, the runner requires exactly one `IAM-32.pickle` and one
+`resnet_18_pretrained.pth` below `/kaggle/input`. Checkpoints and switch artifacts go to
+`/kaggle/working/vatr-feature-map`. The auto run saves `pre_switch.pth`,
+`feature_maps.pt`, and `post_switch_init.pth`, and aborts if fixed query tokens differ by
+more than `1e-6` across materialization.
+
+Run the CPU contract tests with `python -m pytest -q`. The final batch-8 AMP smoke test
+must be run on a Kaggle GPU with the command above because it exercises the full VATr
+GAN and the Kaggle CUDA build.

@@ -15,6 +15,7 @@ from models.inception import InceptionV3
 import cv2
 from .positional_encodings import PositionalEncoding1D
 from models.unifont_module import UnifontModule
+from models.feature_query import FeatureMapQuery
 from PIL import Image
 from datetime import timedelta
 
@@ -119,18 +120,32 @@ class Generator(nn.Module):
         #     )
         # )
 
-        self.Feat_Encoder = models.resnet18(weights='ResNet18_Weights.DEFAULT')
+        # Training explicitly loads resnet_18_pretrained.pth; avoid a hidden
+        # torchvision download (and preserve the same ResNet-18 architecture).
+        self.Feat_Encoder = models.resnet18(weights=None)
         self.Feat_Encoder.conv1 = nn.Conv2d(INP_CHANNEL, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.Feat_Encoder.fc = nn.Identity()
         self.Feat_Encoder.avgpool = nn.Identity()
 
         # self.query_embed = nn.Embedding(self.args.vocab_size, self.args.tn_hidden_dim)
-        self.query_embed = UnifontModule(
-            self.args.tn_dim_feedforward,
-            self.args.alphabet + self.args.special_alphabet,
-            input_type=self.args.query_input,
-            linear=self.args.query_linear
-        )
+        feature_mode = getattr(self.args, 'feature_mode', 'reference_baseline')
+        if feature_mode == 'reference_baseline':
+            # Preserve official VATr parameter names for old checkpoints.
+            self.query_embed = UnifontModule(
+                self.args.tn_hidden_dim,
+                self.args.alphabet + self.args.special_alphabet,
+                device=self.args.device,
+                input_type=self.args.query_input,
+                linear=self.args.query_linear
+            )
+        else:
+            query_stage = 'stage2' if feature_mode == 'stage2' else 'stage1'
+            self.query_embed = FeatureMapQuery(
+                out_dim=self.args.tn_hidden_dim,
+                mode=query_stage,
+                unifont_path=getattr(self.args, 'unifont_path', 'files/unifont.pickle') if query_stage == 'stage1' else None,
+                chunk_size=getattr(self.args, 'glyph_chunk_size', 128),
+            )
         # self.query_embed = LearnableModule(self.args.tn_dim_feedforward)
         self.pos_encoder = PositionalEncoding1D(self.args.tn_hidden_dim)
 
@@ -493,9 +508,14 @@ class VATr(nn.Module):
             eval_encode_pos = self.eval_encode_pos
 
         text_encode, text_len, _ = self.netconverter.encode(self.args.special_alphabet)
-        symbols = self.netG.query_embed.symbols[text_encode].reshape(-1, 16, 16).cpu().numpy()
-        imgs = [Image.fromarray(s).resize((32, 32), resample=0) for s in symbols]
-        special_examples = 1 - np.concatenate([np.array(i) for i in imgs], axis=-1)
+        if hasattr(self.netG.query_embed, 'symbols'):
+            symbols = self.netG.query_embed.symbols[text_encode].reshape(-1, 16, 16).cpu().numpy()
+            imgs = [Image.fromarray(s).resize((32, 32), resample=0) for s in symbols]
+            special_examples = 1 - np.concatenate([np.array(i) for i in imgs], axis=-1)
+        else:
+            glyphs = self.netG.query_embed.glyph_images(text_encode.to(self.args.device))
+            special_examples = None if glyphs is None else 1 - np.concatenate(
+                [g[0].detach().cpu().numpy() for g in glyphs], axis=-1)
 
         self.fakes = self.netG.Eval(ST, eval_text_encode, eval_encode_pos)
 
@@ -526,8 +546,9 @@ class VATr(nn.Module):
                     word_t = []
 
             # add the examples from the UnifontModules
-            word_l.append(special_examples)
-            line_wids.append(special_examples.shape[1])
+            if special_examples is not None:
+                word_l.append(special_examples)
+                line_wids.append(special_examples.shape[1])
 
             gap_h = np.ones([16, max(line_wids)])
 

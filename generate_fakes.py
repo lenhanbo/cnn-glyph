@@ -1,10 +1,21 @@
 from models.model import VATr
 import argparse
-from train import rSeed
 import os
 import torch
+import random
+import numpy as np
 from data.dataset import TextDatasetval, TextDataset, FidDataset
 from pathlib import Path
+from models.stage_manager import load_checkpoint_file
+from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
+
+
+def rSeed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 def load_checkpoint(model, checkpoint):
     old_model = model.state_dict()
@@ -89,8 +100,14 @@ if __name__ == '__main__':
     parser.add_argument("--device", default='cuda', type=str)
     parser.add_argument("--query_input", default='unifont', type=str)
     parser.add_argument("--query_linear", default=True, type=bool)
+    parser.add_argument("--feature_mode", choices=['reference_baseline', 'stage1', 'stage2'],
+                        default='reference_baseline')
+    parser.add_argument("--unifont_path", default='files/unifont.pickle')
+    parser.add_argument("--glyph_chunk_size", default=128, type=int)
     args = parser.parse_args()
     rSeed(args.seed)
+    args.alphabet = IAM_ALPHABET
+    args.special_alphabet = SPECIAL_ALPHABET
 
     if args.dataset == 'IAM':
         args.dataset_path = 'files/IAM-32.pickle'
@@ -138,14 +155,16 @@ if __name__ == '__main__':
         collate_fn=dataset_test.collate_fn
     )
 
-    model = VATr(args)
-
     args.output = Path(args.output) / Path(args.checkpoint).stem
     print(f'Loading checkpoint {args.checkpoint}')
-    checkpoint = torch.load(args.checkpoint)
+    checkpoint = load_checkpoint_file(args.checkpoint, map_location=args.device)
     epoch = 'unknown'
     if 'epoch' in checkpoint: epoch = checkpoint['epoch']
     if 'model' in checkpoint: checkpoint = checkpoint['model']
+    if any(key.endswith('query_embed.feature_maps') for key in checkpoint):
+        args.feature_mode = 'stage2'
+
+    model = VATr(args)
 
     load_checkpoint(model, checkpoint)
 

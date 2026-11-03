@@ -10,6 +10,7 @@ import wandb
 
 from data.dataset import TextDataset, TextDatasetval, CollectionTextDataset
 from models.model import VATr
+from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
 
 
 def main():
@@ -65,8 +66,16 @@ def main():
     parser.add_argument("--device", default='cuda', type=str)
     parser.add_argument("--query_input", default='unifont', type=str)
     parser.add_argument("--query_linear", default=True, type=bool)
+    parser.add_argument("--feature_mode", choices=['reference_baseline', 'auto', 'stage1', 'stage2'],
+                        default='reference_baseline', help='Use train_feature_map.py for automatic stage switching')
+    parser.add_argument("--unifont_path", default='files/unifont.pickle', type=str)
+    parser.add_argument("--glyph_chunk_size", default=128, type=int)
 
     args = parser.parse_args()
+    # IAM uses the published VATr ordering; never infer or sort this contract.
+    if args.dataset == 'IAM':
+        args.alphabet = IAM_ALPHABET
+        args.special_alphabet = SPECIAL_ALPHABET
     rSeed(args.seed)
     dataset = CollectionTextDataset(
         args.dataset, 'files', TextDataset, num_examples=args.num_examples,
