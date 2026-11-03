@@ -138,7 +138,7 @@ bash scripts/kaggle_run.sh auto --dataset-path /kaggle/input/my-iam/iam_dataset 
   --num-workers 2 --output-dir /kaggle/working/vatr-feature-map
 ```
 
-Other runtime flags include `--seed`, `--num-examples`, `--save-every`,
+Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-every`,
 `--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`, and
 `--pretrained-style-encoder --feat-model-path PATH`. Command-line values take
 priority over `configs/kaggle.yaml`.

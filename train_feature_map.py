@@ -66,11 +66,12 @@ class Args:
     """Namespace with VATr's legacy options plus the two-stage configuration."""
     def __init__(self, cfg: dict, num_writers: int, mode: str):
         defaults = dict(
-            dataset="IAM", english_words_path="files/english_words.txt", img_height=32, resolution=16,
+            dataset="IAM", device="cuda", english_words_path="files/english_words.txt", img_height=32, resolution=16,
             batch_size=8, num_examples=15, tn_hidden_dim=512, tn_dropout=0.1, tn_nheads=8,
             tn_dim_feedforward=512, tn_enc_layers=3, tn_dec_layers=3, g_lr=5e-5, d_lr=5e-5,
             w_lr=5e-5, ocr_lr=5e-5, no_writer_loss=False, writer_loss_weight=1.0,
-            no_ocr_loss=False, is_seq=True, is_kld=False, add_noise=False, all_chars=False,
+            no_ocr_loss=False, is_seq=True, num_words=3, is_cycle=False, is_kld=False,
+            add_noise=False, all_chars=False,
             query_input="unifont", query_linear=True, glyph_chunk_size=128,
         )
         defaults.update(cfg)
@@ -156,6 +157,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--switch-epoch", type=int)
     parser.add_argument("--num-examples", type=int)
+    parser.add_argument("--num-words", type=int, help="Number of generated words concatenated per training sample")
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--lr", type=float, help="Set G, D, OCR and writer learning rates together")
@@ -174,7 +176,7 @@ def main() -> None:
     if cli.mode:
         cfg["mode"] = cli.mode
     override_names = (
-        "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples",
+        "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "glyph_chunk_size", "device", "raw_group_by",
         "forms_path", "feat_model_path",
     )
