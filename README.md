@@ -139,9 +139,17 @@ bash scripts/kaggle_run.sh auto --dataset-path /kaggle/input/my-iam/iam_dataset 
 ```
 
 Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-every`,
+`--log-every`, `--preview-every`, `--preview-samples`,
 `--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`, and
 `--pretrained-style-encoder --feat-model-path PATH`. Command-line values take
 priority over `configs/kaggle.yaml`.
+
+Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
+throughput, batch time, stage, and CUDA memory) and prints the same values to the
+Kaggle console. Validation panels containing target text, three style references,
+the real word, and the generated word are written to `OUTPUT/previews/epoch_XXXX.png`.
+CSV history is append-only across resume. Use `--log-every 10` for quieter logs or
+`--preview-every 0` to disable previews.
 
 If paths are null in the YAML, the runner requires exactly one raw IAM directory or one
 `IAM-32.pickle` below `/kaggle/input`. ResNet-18 starts from scratch by default; set

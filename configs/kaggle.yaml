@@ -21,4 +21,7 @@ w_lr: 0.00005
 ocr_lr: 0.00005
 glyph_chunk_size: 128
 save_every: 5
+log_every: 1
+preview_every: 10
+preview_samples: 4
 wandb: false
