@@ -15,7 +15,7 @@ PY
 echo "[2/4] Installing VATr dependencies (torch/torchvision are intentionally absent)"
 python -m pip install -q -r requirements-kaggle.txt
 
-echo "[3/4] Locating Kaggle inputs and validating CUDA"
+echo "[3/4] Locating raw IAM/IAM-32 input and validating CUDA"
 python train_feature_map.py --config configs/kaggle.yaml --preflight-only
 
 echo "[4/4] CPU contract tests"

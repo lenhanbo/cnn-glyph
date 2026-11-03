@@ -14,6 +14,7 @@ import torch
 import yaml
 
 from data.dataset import TextDataset, TextDatasetval
+from data.raw_iam_dataset import RawIAMDataset
 from models.model import VATr
 from models.stage_manager import checkpoint_payload, load_checkpoint_file, restore_rng_state, switch_generator_to_stage2
 from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
@@ -46,9 +47,17 @@ def resolve_paths(config: dict) -> dict:
     config = dict(config)
     kaggle_root = config.get("kaggle_input", "/kaggle/input")
     if not config.get("dataset_path"):
-        config["dataset_path"] = unique_discovery(kaggle_root, "IAM-32.pickle")
-    if not config.get("feat_model_path"):
+        pickles = list(Path(kaggle_root).rglob("IAM-32.pickle"))
+        raw_roots = [path.parent for path in Path(kaggle_root).rglob("train_gt.txt")
+                     if (path.parent / "val_gt.txt").is_file() and (path.parent / "words").is_dir()]
+        candidates = [*pickles, *raw_roots]
+        if len(candidates) != 1:
+            raise FileNotFoundError(f"Expected one IAM-32.pickle or raw iam_dataset below {kaggle_root}; found {candidates}")
+        config["dataset_path"] = str(candidates[0])
+    if config.get("use_pretrained_style_encoder", False) and not config.get("feat_model_path"):
         config["feat_model_path"] = unique_discovery(kaggle_root, "resnet_18_pretrained.pth")
+    if not config.get("use_pretrained_style_encoder", False):
+        config["feat_model_path"] = None
     config.setdefault("unifont_path", "files/unifont.pickle")
     return config
 
@@ -95,8 +104,16 @@ def load_training_state(path: str | Path, model: VATr, scaler, scheduler, device
 
 def make_loaders(cfg: dict):
     common = dict(collator_resolution=cfg.get("resolution", 16), num_examples=cfg.get("num_examples", 15))
-    train_set = TextDataset(cfg["dataset_path"], min_virtual_size=339, **common)
-    val_set = TextDatasetval(cfg["dataset_path"], min_virtual_size=161, **common)
+    dataset_path = Path(cfg["dataset_path"])
+    if dataset_path.is_dir():
+        raw_common = dict(group_by=cfg.get("raw_group_by", "form"), forms_path=cfg.get("forms_path"), **common)
+        train_set = RawIAMDataset(dataset_path, split="train", min_virtual_size=339, **raw_common)
+        val_set = RawIAMDataset(dataset_path, split="val", min_virtual_size=161, **raw_common)
+        print(f"Raw IAM: {train_set.num_writers} train style classes, {val_set.num_writers} val classes; "
+              f"filtered labels={train_set.skipped_labels}/{val_set.skipped_labels}")
+    else:
+        train_set = TextDataset(dataset_path, min_virtual_size=339, **common)
+        val_set = TextDatasetval(dataset_path, min_virtual_size=161, **common)
     loader_args = dict(batch_size=cfg.get("batch_size", 8), num_workers=cfg.get("num_workers", 2),
                        pin_memory=True, drop_last=True)
     train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, collate_fn=train_set.collate_fn, **loader_args)

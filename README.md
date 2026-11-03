@@ -96,20 +96,20 @@ python train_feature_map.py --config configs/kaggle.yaml --preflight-only
 python train_feature_map.py --config configs/kaggle.yaml --mode auto
 ```
 
-For a fresh Kaggle notebook, first upload the ZIP made by
-`powershell -File scripts/package_source.ps1`, attach IAM-32 and the pretrained ResNet
-as Kaggle datasets, enable a T4/P100 accelerator, then import `kaggle_notebook.ipynb`
+For a fresh Kaggle notebook, attach a raw `iam_dataset` containing `words/`,
+`train_gt.txt`, and `val_gt.txt` (or the legacy `IAM-32.pickle`), enable a T4/P100
+accelerator, then clone this GitHub repository or import `kaggle_notebook.ipynb`
 or run these equivalent cells:
 
 ```bash
-!unzip -q /kaggle/input/<source-dataset>/vatr-feature-map-source.zip -d /kaggle/working/VATr-FeatureMap
-%cd /kaggle/working/VATr-FeatureMap
+!git clone --depth 1 https://github.com/lenhanbo/cnn-glyph.git /kaggle/working/cnn-glyph
+%cd /kaggle/working/cnn-glyph
 !bash scripts/kaggle_setup.sh
 !bash scripts/kaggle_run.sh smoke
 !bash scripts/kaggle_run.sh auto
 ```
 
-After a notebook restart, extract the source again and use
+After a notebook restart, clone the source again and use
 `!bash scripts/kaggle_run.sh resume`. Persist `/kaggle/working/vatr-feature-map/latest.pth`
 as a Kaggle output/version before the session ends. The setup fails early if CUDA is
 disabled or if input discovery finds zero/multiple matching files.
@@ -124,8 +124,12 @@ python train_feature_map.py --config configs/kaggle.yaml --resume
 python train_feature_map.py --config configs/kaggle.yaml --smoke
 ```
 
-If paths are null in the YAML, the runner requires exactly one `IAM-32.pickle` and one
-`resnet_18_pretrained.pth` below `/kaggle/input`. Checkpoints and switch artifacts go to
+If paths are null in the YAML, the runner requires exactly one raw IAM directory or one
+`IAM-32.pickle` below `/kaggle/input`. ResNet-18 starts from scratch by default; set
+`use_pretrained_style_encoder: true` to require and load `resnet_18_pretrained.pth`.
+The raw files do not contain writer IDs, so the default groups samples by IAM form.
+For exact writer grouping, attach official `forms.txt`, set `forms_path`, and change
+`raw_group_by` to `writer`. Checkpoints and switch artifacts go to
 `/kaggle/working/vatr-feature-map`. The auto run saves `pre_switch.pth`,
 `feature_maps.pt`, and `post_switch_init.pth`, and aborts if fixed query tokens differ by
 more than `1e-6` across materialization.
