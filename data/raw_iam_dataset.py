@@ -24,7 +24,7 @@ class RawIAMDataset(Dataset):
     separate writer-loss classes. Supply official forms.txt for true writer IDs.
     """
 
-    def __init__(self, root, split="train", num_examples=15, collator_resolution=16,
+    def __init__(self, root, split="train", num_examples=1, collator_resolution=16,
                  min_virtual_size=0, group_by="form", forms_path=None):
         self.root = Path(root).resolve()
         self.num_examples = int(num_examples)

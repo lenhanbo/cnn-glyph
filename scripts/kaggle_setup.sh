@@ -22,6 +22,7 @@ requirements = {
     "yaml": "PyYAML>=6.0",
     "cv2": "opencv-python-headless>=4.10",
     "pytest": "pytest>=7",
+    "gdown": "gdown>=4.6.6",
 }
 missing = []
 for module, package in requirements.items():

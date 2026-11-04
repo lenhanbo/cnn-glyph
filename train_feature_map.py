@@ -18,9 +18,10 @@ from PIL import Image, ImageDraw
 
 from data.dataset import TextDataset, TextDatasetval
 from data.raw_iam_dataset import RawIAMDataset
-from models.model import VATr
+from models.model import VATr, load_pretrained_style_encoder
 from models.stage_manager import capture_rng_state, checkpoint_payload, load_checkpoint_file, restore_rng_state, switch_generator_to_stage2
 from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
+from util.pretrained import STYLE_ENCODER_FILENAME, ensure_pretrained_style_encoder
 
 
 LOSS_NAMES = ("G", "D", "Dfake", "Dreal", "OCR_fake", "OCR_real", "w_fake", "w_real", "cycle")
@@ -141,6 +142,25 @@ def resolve_paths(config: dict) -> dict:
         if len(candidates) != 1:
             raise FileNotFoundError(f"Expected one IAM-32.pickle or raw iam_dataset below {kaggle_root}; found {candidates}")
         config["dataset_path"] = str(candidates[0])
+    if config.get("use_pretrained_style_encoder", True) and not config.get("feat_model_path"):
+        matches = list(Path(kaggle_root).rglob(STYLE_ENCODER_FILENAME))
+        if len(matches) > 1:
+            raise FileNotFoundError(
+                f"Expected at most one {STYLE_ENCODER_FILENAME!r} below {kaggle_root}; "
+                f"found {len(matches)}: {matches}. Set feat_model_path explicitly."
+            )
+        if matches:
+            config["feat_model_path"] = str(matches[0])
+        elif config.get("auto_download_style_encoder", True):
+            cache = Path(config.get("output_dir", "/kaggle/working/vatr-feature-map")) / "pretrained" / STYLE_ENCODER_FILENAME
+            print(f"Pretrained style encoder not attached; downloading to {cache}")
+            config["feat_model_path"] = ensure_pretrained_style_encoder(cache)
+        else:
+            raise FileNotFoundError(
+                f"{STYLE_ENCODER_FILENAME} was not found below {kaggle_root} and automatic download is disabled"
+            )
+    if not config.get("use_pretrained_style_encoder", True):
+        config["feat_model_path"] = None
     config.setdefault("unifont_path", "files/unifont.pickle")
     return config
 
@@ -150,7 +170,7 @@ class Args:
     def __init__(self, cfg: dict, num_writers: int, mode: str):
         defaults = dict(
             dataset="IAM", device="cuda", english_words_path="files/english_words.txt", img_height=32, resolution=16,
-            batch_size=8, num_examples=15, tn_hidden_dim=512, tn_dropout=0.1, tn_nheads=8,
+            batch_size=8, num_examples=1, tn_hidden_dim=512, tn_dropout=0.1, tn_nheads=8,
             tn_dim_feedforward=512, tn_enc_layers=3, tn_dec_layers=3, g_lr=5e-5, d_lr=5e-5,
             w_lr=5e-5, ocr_lr=5e-5, no_writer_loss=False, writer_loss_weight=1.0,
             no_ocr_loss=False, is_seq=True, num_words=3, is_cycle=False, is_kld=False,
@@ -187,7 +207,7 @@ def load_training_state(path: str | Path, model: VATr, scaler, scheduler, device
 
 
 def make_loaders(cfg: dict):
-    common = dict(collator_resolution=cfg.get("resolution", 16), num_examples=cfg.get("num_examples", 15))
+    common = dict(collator_resolution=cfg.get("resolution", 16), num_examples=cfg.get("num_examples", 1))
     dataset_path = Path(cfg["dataset_path"])
     if dataset_path.is_dir():
         raw_common = dict(group_by=cfg.get("raw_group_by", "form"), forms_path=cfg.get("forms_path"), **common)
@@ -252,6 +272,12 @@ def main() -> None:
     parser.add_argument("--device")
     parser.add_argument("--raw-group-by", choices=["form", "writer"])
     parser.add_argument("--forms-path", help="Official IAM forms.txt; required with raw-group-by=writer")
+    parser.add_argument("--feat-model-path")
+    style_group = parser.add_mutually_exclusive_group()
+    style_group.add_argument("--pretrained-style-encoder", dest="pretrained_style_encoder",
+                             action="store_true", default=None)
+    style_group.add_argument("--no-pretrained-style-encoder", dest="pretrained_style_encoder",
+                             action="store_false")
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
@@ -263,7 +289,7 @@ def main() -> None:
         "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "glyph_chunk_size", "device", "raw_group_by",
-        "forms_path",
+        "forms_path", "feat_model_path",
     )
     for name in override_names:
         value = getattr(cli, name)
@@ -271,6 +297,8 @@ def main() -> None:
             cfg[name] = value
     if cli.lr is not None:
         cfg.update(g_lr=cli.lr, d_lr=cli.lr, w_lr=cli.lr, ocr_lr=cli.lr)
+    if cli.pretrained_style_encoder is not None:
+        cfg["use_pretrained_style_encoder"] = cli.pretrained_style_encoder
     if cli.no_amp:
         cfg["amp"] = False
     if cli.smoke:
@@ -312,6 +340,10 @@ def main() -> None:
             raise ValueError("stage2 requires --stage1-checkpoint")
         start_epoch, global_step = load_training_state(source, model, scaler, scheduler, cfg["device"])
         switch_stage(model, output, start_epoch, global_step, scaler, scheduler, cfg)
+    elif cfg.get("feat_model_path"):
+        checkpoint = torch.load(cfg["feat_model_path"], map_location=cfg["device"])
+        load_pretrained_style_encoder(model.netG.Feat_Encoder, checkpoint)
+        print(f"Loaded pretrained ResNet-18 style encoder: {cfg['feat_model_path']}")
     amp_context = (lambda: torch.autocast("cuda", dtype=torch.float16)) if scaler.is_enabled() else contextlib.nullcontext
     epochs = int(cfg.get("epochs", 7000))
     switch_epoch = int(cfg.get("switch_epoch", 3500))

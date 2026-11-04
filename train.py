@@ -9,13 +9,15 @@ import torch
 import wandb
 
 from data.dataset import TextDataset, TextDatasetval, CollectionTextDataset
-from models.model import VATr
+from models.model import VATr, load_pretrained_style_encoder
 from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
+from util.pretrained import ensure_pretrained_style_encoder
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", action='store_true')
+    parser.add_argument("--feat_model_path", type=str, default='files/resnet_18_pretrained.pth')
     parser.add_argument("--label_encoder", default='default', type=str)
     parser.add_argument("--save_model_path", default='saved_models', type=str)
     parser.add_argument("--dataset", default='IAM', type=str)
@@ -29,7 +31,7 @@ def main():
     parser.add_argument("--img_height", default=32, type=int)
     parser.add_argument("--resolution", default=16, type=int)
     parser.add_argument("--batch_size", default=8, type=int)
-    parser.add_argument("--num_examples", default=15, type=int)
+    parser.add_argument("--num_examples", default=1, type=int)
 
     parser.add_argument("--tn_hidden_dim", default=512, type=int)
     parser.add_argument("--tn_dropout", default=0.1, type=float)
@@ -143,7 +145,12 @@ def main():
     elif args.resume:
         raise FileNotFoundError(f'No model found at {checkpoint_path}')
     else:
-        print('Training the lightweight style CNN from scratch')
+        if not os.path.isfile(args.feat_model_path):
+            print('Pretrained style encoder not found; downloading official checkpoint...')
+            args.feat_model_path = ensure_pretrained_style_encoder(args.feat_model_path)
+        print('Loading pretrained style encoder...', args.feat_model_path)
+        checkpoint = torch.load(args.feat_model_path, map_location=args.device)
+        load_pretrained_style_encoder(model.netG.Feat_Encoder, checkpoint)
 
     if args.wandb:
         wandb.init(**wandb_params)

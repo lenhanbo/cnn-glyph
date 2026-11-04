@@ -61,7 +61,7 @@ if __name__ == '__main__':
     parser.add_argument("--img_height", default=32, type=int)
     parser.add_argument("--resolution", default=16, type=int)
     parser.add_argument("--batch_size", default=8, type=int)
-    parser.add_argument("--num_examples", default=15, type=int)
+    parser.add_argument("--num_examples", default=1, type=int)
 
     parser.add_argument("--tn_hidden_dim", default=512, type=int)
     parser.add_argument("--tn_dropout", default=0.1, type=float)

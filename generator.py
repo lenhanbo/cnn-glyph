@@ -53,7 +53,7 @@ class FakeArgs:
     num_workers = 4
     num_epochs = 100
     lr = 0.0001
-    num_examples = 15
+    num_examples = 1
     is_seq = True
     is_kld = False
     tn_hidden_dim = 512
@@ -87,7 +87,7 @@ class VATr_writer:
         self.model.eval()
         self.style_dataset = None
 
-    def set_style_folder(self, style_folder, num_examples=15):
+    def set_style_folder(self, style_folder, num_examples=1):
         self.style_dataset = FolderDataset(style_folder, num_examples=num_examples)
 
     @torch.no_grad()

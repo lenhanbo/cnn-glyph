@@ -1,5 +1,8 @@
 mode: auto
 dataset_path: null
+feat_model_path: null
+use_pretrained_style_encoder: true
+auto_download_style_encoder: true
 raw_group_by: form
 forms_path: null
 unifont_path: files/unifont.pickle
@@ -10,7 +13,7 @@ seed: 742
 epochs: 7000
 switch_epoch: 3500
 batch_size: 8
-num_examples: 15
+num_examples: 1
 num_workers: 2
 amp: true
 g_lr: 0.00005

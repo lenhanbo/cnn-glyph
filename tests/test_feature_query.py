@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 
-from models.feature_query import FeatureMapQuery, GlyphCNN, RESIZE_ALGORITHM, load_gnu_glyph_bank
+from models.feature_query import FeatureMapQuery, GlyphCNN, LiteGlyphCNN, RESIZE_ALGORITHM, load_gnu_glyph_bank
 from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET, char_to_id
 
 
@@ -30,7 +30,10 @@ def test_nearest_resize_and_metadata():
 
 
 def test_cnn_shape_is_64_by_8_by_8():
-    assert GlyphCNN()(torch.randn(7, 1, 32, 32)).shape == (7, 64, 8, 8)
+    cnn = GlyphCNN()
+    assert isinstance(cnn, LiteGlyphCNN)
+    assert cnn(torch.randn(7, 1, 32, 32)).shape == (7, 64, 8, 8)
+    assert sum(parameter.numel() for parameter in cnn.parameters()) == 7_808
 
 
 def test_attention_precedes_pool_and_padding_is_isolated():

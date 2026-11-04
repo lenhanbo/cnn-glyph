@@ -4,6 +4,7 @@ from torch.nn.utils import clip_grad_norm_
 import time
 import sys
 import random
+import torchvision.models as models
 from models.transformer import *
 from .BigGAN_networks import *
 from .OCR_network import *
@@ -19,60 +20,22 @@ from PIL import Image
 from datetime import timedelta
 
 
-def _group_count(channels, max_groups=8):
-    for groups in (max_groups, 4, 2, 1):
-        if channels % groups == 0:
-            return groups
-    return 1
-
-
-class DepthwiseSeparableBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 3, stride=2, padding=1,
-                      groups=in_channels, bias=False),
-            nn.GroupNorm(_group_count(in_channels), in_channels),
-            nn.SiLU(inplace=True),
-            nn.Conv2d(in_channels, out_channels, 1, bias=False),
-            nn.GroupNorm(_group_count(out_channels), out_channels),
-            nn.SiLU(inplace=True),
+def load_pretrained_style_encoder(encoder, checkpoint):
+    """Load an RGB ResNet-18 style checkpoint into the grayscale VATr encoder."""
+    state = checkpoint.get('model', checkpoint)
+    state = dict(state)
+    if 'conv1.weight' not in state:
+        raise KeyError("Style checkpoint does not contain 'conv1.weight'")
+    if state['conv1.weight'].shape[1] != encoder.conv1.weight.shape[1]:
+        if encoder.conv1.weight.shape[1] != 1:
+            raise ValueError("Only RGB-to-grayscale style checkpoint conversion is supported")
+        state['conv1.weight'] = state['conv1.weight'].mean(dim=1, keepdim=True)
+    missing, unexpected = encoder.load_state_dict(state, strict=False)
+    unexpected = [key for key in unexpected if key not in {'fc.weight', 'fc.bias'}]
+    if missing or unexpected:
+        raise RuntimeError(
+            f"Incompatible style checkpoint: missing={missing}, unexpected={unexpected}"
         )
-
-    def forward(self, x):
-        return self.block(x)
-
-
-class LiteStyleCNN(nn.Module):
-    """Lightweight hierarchical style encoder for 32px-high word images.
-
-    Five stride-2 stages preserve the former encoder contract: 512 channels,
-    one output row, and ``ceil(width / 32)`` horizontal style tokens.
-    """
-
-    def __init__(self, in_channels=1, out_channels=512, input_height=32):
-        super().__init__()
-        if input_height != 32:
-            raise ValueError(f"LiteStyleCNN requires input_height=32, got {input_height}")
-        self.input_height = input_height
-        self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, 32, 3, stride=2, padding=1, bias=False),
-            nn.GroupNorm(_group_count(32), 32),
-            nn.SiLU(inplace=True),
-        )
-        self.blocks = nn.Sequential(
-            DepthwiseSeparableBlock(32, 64),
-            DepthwiseSeparableBlock(64, 128),
-            DepthwiseSeparableBlock(128, 256),
-            DepthwiseSeparableBlock(256, out_channels),
-        )
-
-    def forward(self, x):
-        if x.shape[-2] != self.input_height:
-            raise ValueError(
-                f"Expected style images with height {self.input_height}, got {x.shape[-2]}"
-            )
-        return self.blocks(self.stem(x))
 
 
 def ctc_loss_fp32(criterion, predictions, targets, input_lengths, target_lengths):
@@ -175,11 +138,13 @@ class Generator(nn.Module):
         self.decoder = TransformerDecoder(decoder_layer, self.args.tn_dec_layers, decoder_norm,
                                           return_intermediate=True)
 
-        self.Feat_Encoder = LiteStyleCNN(
-            in_channels=INP_CHANNEL,
-            out_channels=self.args.tn_hidden_dim,
-            input_height=self.args.img_height,
+        # The style encoder remains the pretrained ResNet-18 used by VATr.
+        self.Feat_Encoder = models.resnet18(weights=None)
+        self.Feat_Encoder.conv1 = nn.Conv2d(
+            INP_CHANNEL, 64, kernel_size=7, stride=2, padding=3, bias=False
         )
+        self.Feat_Encoder.fc = nn.Identity()
+        self.Feat_Encoder.avgpool = nn.Identity()
 
         # self.query_embed = nn.Embedding(self.args.vocab_size, self.args.tn_hidden_dim)
         feature_mode = getattr(self.args, 'feature_mode', 'reference_baseline')
@@ -908,7 +873,8 @@ class VATr(nn.Module):
     def compute_cycle_loss(self):
         fake_input = torch.ones_like(self.sdata)
         width = min(self.sdata.size(-1), self.fake.size(-1))
-        fake_input[:, :, :, :width] = self.fake.repeat(1, 15, 1, 1)[:, :, :, :width]
+        num_references = self.sdata.size(1)
+        fake_input[:, :, :, :width] = self.fake.repeat(1, num_references, 1, 1)[:, :, :, :width]
         with torch.no_grad():
             fake_style = self.netG.compute_style(fake_input)
         return torch.sum(torch.abs(self.style.detach() - fake_style), dim=1).mean()

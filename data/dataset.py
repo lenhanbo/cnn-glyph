@@ -26,7 +26,7 @@ def get_transform(grayscale=False, convert=True):
 
 class TextDataset:
 
-    def __init__(self, base_path, collator_resolution, num_examples=15, target_transform=None, min_virtual_size=0):
+    def __init__(self, base_path, collator_resolution, num_examples=1, target_transform=None, min_virtual_size=0):
         self.NUM_EXAMPLES = num_examples
         self.min_virtual_size = min_virtual_size
 
@@ -88,7 +88,7 @@ class TextDataset:
 
         item = {
             'simg': imgs_pad,  # widths of the N images [list(N)]
-            'swids': imgs_wids,  # N images (15) that come from the same author [N (15), H (32), MAX_W (192)]
+            'swids': imgs_wids,  # N reference images from the same author [N, H (32), MAX_W (192)]
             'img': real_img,  # the input image [1, H (32), W]
             'label': real_labels,  # the label of the input image [byte]
             'img_path': 'img_path',
@@ -100,7 +100,7 @@ class TextDataset:
 
 class TextDatasetval():
 
-    def __init__(self, base_path, collator_resolution, num_examples=15, target_transform=None, min_virtual_size=0):
+    def __init__(self, base_path, collator_resolution, num_examples=1, target_transform=None, min_virtual_size=0):
         self.NUM_EXAMPLES = num_examples
         self.min_virtual_size = min_virtual_size
 
@@ -227,7 +227,7 @@ class CollectionTextDataset(Dataset):
         return self.datasets[self.get_dataset(0)].collate_fn(batch)
 
 class FidDataset:
-    def __init__(self, base_path, collator_resolution, num_examples=15, target_transform=None, mode='train'):
+    def __init__(self, base_path, collator_resolution, num_examples=1, target_transform=None, mode='train'):
         self.NUM_EXAMPLES = num_examples
 
         # base_path=DATASET_PATHS
@@ -291,7 +291,7 @@ class FidDataset:
 
         item = {
             'simg': imgs_pad,  # widths of the N images [list(N)]
-            'swids': imgs_wids,  # N images (15) that come from the same author [N (15), H (32), MAX_W (192)]
+            'swids': imgs_wids,  # N reference images from the same author [N, H (32), MAX_W (192)]
             'img': real_img,  # the input image [1, H (32), W]
             'label': real_labels,  # the label of the input image [byte]
             'img_path': 'img_path',
@@ -360,7 +360,7 @@ class FidDatasetNum(FidDataset):
 
         item = {
             'simg': imgs_pad,  # widths of the N images [list(N)]
-            'swids': imgs_wids,  # N images (15) that come from the same author [N (15), H (32), MAX_W (192)]
+            'swids': imgs_wids,  # N reference images from the same author [N, H (32), MAX_W (192)]
             'img': real_img,  # the input image [1, H (32), W]
             'label': real_labels,  # the label of the input image [byte]
             'img_path': 'img_path',
@@ -436,7 +436,7 @@ class TextSentenceval(TextDatasetval):
         return res
 
 class FolderDataset:
-    def __init__(self, folder_path, num_examples=15):
+    def __init__(self, folder_path, num_examples=1):
         folder_path = Path(folder_path)
         self.imgs = list(folder_path.iterdir())
         self.transform = get_transform(grayscale=True)
@@ -471,6 +471,6 @@ class FolderDataset:
 
         item = {
             'simg': imgs_pad,  # widths of the N images [list(N)]
-            'swids': imgs_wids,  # N images (15) that come from the same author [N (15), H (32), MAX_W (192)]
+            'swids': imgs_wids,  # N reference images from the same author [N, H (32), MAX_W (192)]
         }
         return item

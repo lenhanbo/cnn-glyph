@@ -1,28 +1,22 @@
-import pytest
 import torch
+from torch import nn
+from torchvision import models
 
-from models.model import DepthwiseSeparableBlock, LiteStyleCNN
-
-
-def test_lightweight_style_encoder_contract():
-    encoder = LiteStyleCNN()
-    output = encoder(torch.randn(2, 1, 32, 192))
-
-    assert output.shape == (2, 512, 1, 6)
-    assert sum(parameter.numel() for parameter in encoder.parameters()) == 181_632
-    assert len(encoder.blocks) == 4
-    assert all(isinstance(block, DepthwiseSeparableBlock) for block in encoder.blocks)
+from models.model import load_pretrained_style_encoder
 
 
-def test_lightweight_style_encoder_pads_partial_width_patch():
-    encoder = LiteStyleCNN()
-    output = encoder(torch.randn(1, 1, 32, 193))
+def test_pretrained_resnet_style_encoder_contract_and_grayscale_conversion():
+    source = models.resnet18(weights=None)
+    checkpoint = {"model": source.state_dict()}
 
-    assert output.shape == (1, 512, 1, 7)
+    encoder = models.resnet18(weights=None)
+    encoder.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    encoder.fc = nn.Identity()
+    encoder.avgpool = nn.Identity()
+    load_pretrained_style_encoder(encoder, checkpoint)
 
-
-def test_lightweight_style_encoder_rejects_wrong_height():
-    encoder = LiteStyleCNN()
-
-    with pytest.raises(ValueError, match="height 32"):
-        encoder(torch.randn(1, 1, 31, 192))
+    expected = source.conv1.weight.mean(dim=1, keepdim=True)
+    torch.testing.assert_close(encoder.conv1.weight, expected)
+    features = encoder(torch.randn(2, 1, 32, 192))
+    assert features.shape == (2, 512 * 6)
+    assert features.view(2, 512, 1, -1).shape == (2, 512, 1, 6)

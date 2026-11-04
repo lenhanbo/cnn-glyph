@@ -12,5 +12,6 @@ def test_runner_provides_all_legacy_vatr_runtime_arguments():
         "tn_hidden_dim", "tn_nheads", "vocab_size", "w_lr", "writer_loss_weight",
     }
     assert not sorted(name for name in required if not hasattr(args, name))
+    assert args.num_examples == 1
     assert args.num_words == 3
     assert args.is_cycle is False

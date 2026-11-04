@@ -58,40 +58,45 @@ def save_glyph_cache(unifont_path: str | Path, tensor_path: str | Path, metadata
     Path(metadata_path).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
 
-class ResidualBlock(nn.Module):
-    def __init__(self, channels: int = 64):
+class DepthwiseSeparableBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
-            nn.GroupNorm(8, channels),
+            nn.Conv2d(in_channels, in_channels, 3, stride=stride, padding=1,
+                      groups=in_channels, bias=False),
+            nn.GroupNorm(8, in_channels),
             nn.GELU(),
-            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
-            nn.GroupNorm(8, channels),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.GroupNorm(8, out_channels),
+            nn.GELU(),
         )
-        self.activation = nn.GELU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.activation(x + self.block(x))
+        return self.block(x)
 
 
-class GlyphCNN(nn.Module):
+class LiteGlyphCNN(nn.Module):
+    """Depthwise-separable GNU glyph encoder: [N,1,32,32] -> [N,64,8,8]."""
+
     def __init__(self):
         super().__init__()
         self.network = nn.Sequential(
             nn.Conv2d(1, 32, 3, stride=2, padding=1, bias=False),
             nn.GroupNorm(8, 32),
             nn.GELU(),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1, bias=False),
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            ResidualBlock(64),
+            DepthwiseSeparableBlock(32, 64, stride=2),
+            DepthwiseSeparableBlock(64, 64),
         )
 
     def forward(self, glyphs: torch.Tensor) -> torch.Tensor:
         result = self.network(glyphs)
         if result.shape[1:] != (64, 8, 8):
-            raise RuntimeError(f"GlyphCNN returned {tuple(result.shape[1:])}, expected (64, 8, 8)")
+            raise RuntimeError(f"LiteGlyphCNN returned {tuple(result.shape[1:])}, expected (64, 8, 8)")
         return result
+
+
+# Keep the public name used by existing stage-management code and tests.
+GlyphCNN = LiteGlyphCNN
 
 
 class SpatialAttentionPool(nn.Module):
@@ -136,7 +141,7 @@ class FeatureMapQuery(nn.Module):
                 raise ValueError("stage1 requires unifont_path")
             glyphs, self.cache_metadata = load_gnu_glyph_bank(unifont_path)
             self.register_buffer("glyph_bank", glyphs, persistent=True)
-            self.cnn = GlyphCNN()
+            self.cnn = LiteGlyphCNN()
         else:
             if feature_maps is None:
                 feature_maps = torch.zeros(VOCAB_SIZE_WITH_PADDING, 64, 8, 8)
