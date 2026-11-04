@@ -4,7 +4,6 @@ from torch.nn.utils import clip_grad_norm_
 import time
 import sys
 import random
-import torchvision.models as models
 from models.transformer import *
 from .BigGAN_networks import *
 from .OCR_network import *
@@ -18,6 +17,62 @@ from models.unifont_module import UnifontModule
 from models.feature_query import FeatureMapQuery
 from PIL import Image
 from datetime import timedelta
+
+
+def _group_count(channels, max_groups=8):
+    for groups in (max_groups, 4, 2, 1):
+        if channels % groups == 0:
+            return groups
+    return 1
+
+
+class DepthwiseSeparableBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, 3, stride=2, padding=1,
+                      groups=in_channels, bias=False),
+            nn.GroupNorm(_group_count(in_channels), in_channels),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.GroupNorm(_group_count(out_channels), out_channels),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class LiteStyleCNN(nn.Module):
+    """Lightweight hierarchical style encoder for 32px-high word images.
+
+    Five stride-2 stages preserve the former encoder contract: 512 channels,
+    one output row, and ``ceil(width / 32)`` horizontal style tokens.
+    """
+
+    def __init__(self, in_channels=1, out_channels=512, input_height=32):
+        super().__init__()
+        if input_height != 32:
+            raise ValueError(f"LiteStyleCNN requires input_height=32, got {input_height}")
+        self.input_height = input_height
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_channels, 32, 3, stride=2, padding=1, bias=False),
+            nn.GroupNorm(_group_count(32), 32),
+            nn.SiLU(inplace=True),
+        )
+        self.blocks = nn.Sequential(
+            DepthwiseSeparableBlock(32, 64),
+            DepthwiseSeparableBlock(64, 128),
+            DepthwiseSeparableBlock(128, 256),
+            DepthwiseSeparableBlock(256, out_channels),
+        )
+
+    def forward(self, x):
+        if x.shape[-2] != self.input_height:
+            raise ValueError(
+                f"Expected style images with height {self.input_height}, got {x.shape[-2]}"
+            )
+        return self.blocks(self.stem(x))
 
 
 def ctc_loss_fp32(criterion, predictions, targets, input_lengths, target_lengths):
@@ -120,18 +175,11 @@ class Generator(nn.Module):
         self.decoder = TransformerDecoder(decoder_layer, self.args.tn_dec_layers, decoder_norm,
                                           return_intermediate=True)
 
-        # self.Feat_Encoder = nn.Sequential(
-        #     *(
-        #             [nn.Conv2d(INP_CHANNEL, 64, kernel_size=7, stride=2, padding=3, bias=False)] + list(models.resnet18(pretrained=True).children())[1:-2]
-        #     )
-        # )
-
-        # Training explicitly loads resnet_18_pretrained.pth; avoid a hidden
-        # torchvision download (and preserve the same ResNet-18 architecture).
-        self.Feat_Encoder = models.resnet18(weights=None)
-        self.Feat_Encoder.conv1 = nn.Conv2d(INP_CHANNEL, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.Feat_Encoder.fc = nn.Identity()
-        self.Feat_Encoder.avgpool = nn.Identity()
+        self.Feat_Encoder = LiteStyleCNN(
+            in_channels=INP_CHANNEL,
+            out_channels=self.args.tn_hidden_dim,
+            input_height=self.args.img_height,
+        )
 
         # self.query_embed = nn.Embedding(self.args.vocab_size, self.args.tn_hidden_dim)
         feature_mode = getattr(self.args, 'feature_mode', 'reference_baseline')

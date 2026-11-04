@@ -1,7 +1,5 @@
 mode: auto
 dataset_path: null
-feat_model_path: null
-use_pretrained_style_encoder: false
 raw_group_by: form
 forms_path: null
 unifont_path: files/unifont.pickle

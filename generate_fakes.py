@@ -48,7 +48,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--checkpoint", type=str, required=True)
     parser.add_argument("-o", "--output", type=str, default='saved_images')
-    parser.add_argument("--feat_model_path", type=str, default='files/resnet_18_pretrained.pth')
     parser.add_argument("--label_encoder", default='default', type=str)
     parser.add_argument("--save_model_path", default='saved_models', type=str)
     parser.add_argument("--dataset", default='IAM', type=str)

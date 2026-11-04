@@ -25,7 +25,7 @@ git clone https://github.com/aimagelab/VATr.git && cd VATr
 pip install -r requirements.txt
 ```
 
-From [this folder](https://drive.google.com/drive/folders/1FGJe2uCuK8T9HrFzY_Zc-KMIo0oPJGGY?usp=share_link) you have to download the files `IAM-32.pickle` and `resnet_18_pretrained.pth` and place them into the `files` folder.
+From [this folder](https://drive.google.com/drive/folders/1FGJe2uCuK8T9HrFzY_Zc-KMIo0oPJGGY?usp=share_link) download `IAM-32.pickle` and place it into the `files` folder.
 
 ```console
 gdown --folder "https://drive.google.com/drive/u/2/folders/1FGJe2uCuK8T9HrFzY_Zc-KMIo0oPJGGY"
@@ -40,14 +40,12 @@ python train.py
 Useful arguments:
 ```console
 python train.py
-        --feat_model_path PATH  # path to the pretrained resnet 18 checkpoint. If none, the resnet will be trained from scratch
         --dataset DATASET       # dataset to use. Default IAM
         --resume                # resume training from the last checkpoint with the same name
         --wandb                 # use wandb for logging
 ```
 
-### Pretraining dataset
-The model `resnet_18_pretrained.pth` was pretrained by using this dataset: [download link](https://github.com/aimagelab/font_square)
+The style encoder is a lightweight depthwise-separable CNN trained together with the generator; it does not require a separate pretrained checkpoint.
 
 
 ## Generate styled Handwtitten Text Images
@@ -76,8 +74,9 @@ This work is partially based on the code released for [Handwriting-Transformers]
 
 ## Two-stage 32x32 GNU feature maps
 
-This fork keeps the official VATr generator, ResNet-18 style encoder, Transformer decoder,
-image decoder, GAN, OCR loss, and writer loss. Only the character-query backend changes:
+This fork uses a lightweight depthwise-separable CNN for style encoding while keeping the official
+VATr Transformer decoder, image decoder, GAN, OCR loss, and writer loss. The character-query
+backend has two additional modes:
 
 1. `stage1`: fixed GNU glyphs are resized 16x16 -> 32x32 with exact nearest-neighbour
    replication, encoded to `[64,8,8]` by a GroupNorm CNN, then spatially attended.
@@ -140,9 +139,8 @@ bash scripts/kaggle_run.sh auto --dataset-path /kaggle/input/my-iam/iam_dataset 
 
 Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-every`,
 `--log-every`, `--preview-every`, `--preview-samples`,
-`--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`, and
-`--pretrained-style-encoder --feat-model-path PATH`. Command-line values take
-priority over `configs/kaggle.yaml`.
+`--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, and `--forms-path`.
+Command-line values take priority over `configs/kaggle.yaml`.
 
 Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
 throughput, batch time, stage, and CUDA memory) and prints the same values to the
@@ -152,8 +150,7 @@ CSV history is append-only across resume. Use `--log-every 10` for quieter logs 
 `--preview-every 0` to disable previews.
 
 If paths are null in the YAML, the runner requires exactly one raw IAM directory or one
-`IAM-32.pickle` below `/kaggle/input`. ResNet-18 starts from scratch by default; set
-`use_pretrained_style_encoder: true` to require and load `resnet_18_pretrained.pth`.
+`IAM-32.pickle` below `/kaggle/input`. The lightweight style CNN is trained from scratch.
 The raw files do not contain writer IDs, so the default groups samples by IAM form.
 For exact writer grouping, attach official `forms.txt`, set `forms_path`, and change
 `raw_group_by` to `writer`. Checkpoints and switch artifacts go to

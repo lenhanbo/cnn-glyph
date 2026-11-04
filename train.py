@@ -16,7 +16,6 @@ from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--resume", action='store_true')
-    parser.add_argument("--feat_model_path", type=str, default='files/resnet_18_pretrained.pth')
     parser.add_argument("--label_encoder", default='default', type=str)
     parser.add_argument("--save_model_path", default='saved_models', type=str)
     parser.add_argument("--dataset", default='IAM', type=str)
@@ -144,16 +143,7 @@ def main():
     elif args.resume:
         raise FileNotFoundError(f'No model found at {checkpoint_path}')
     else:
-        if args.feat_model_path is not None and args.feat_model_path.lower() != 'none':
-            print('Loading...', args.feat_model_path)
-            assert os.path.exists(args.feat_model_path)
-            checkpoint = torch.load(args.feat_model_path)
-            checkpoint['model']['conv1.weight'] = checkpoint['model']['conv1.weight'].mean(1).unsqueeze(1)
-            miss, unexp = model.netG.Feat_Encoder.load_state_dict(checkpoint['model'], strict=False)
-            assert unexp == ['fc.weight', 'fc.bias']
-            if not os.path.isdir(MODEL_PATH): os.mkdir(MODEL_PATH)
-        else:
-            print(f'WARNING: No resume of Resnet-18, starting from scratch')
+        print('Training the lightweight style CNN from scratch')
 
     if args.wandb:
         wandb.init(**wandb_params)

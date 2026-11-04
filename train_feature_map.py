@@ -114,13 +114,6 @@ def save_preview(model: VATr, data: dict, path: str | Path, device: str, max_sam
         restore_rng_state(rng_state)
 
 
-def unique_discovery(root: str | Path, filename: str) -> str:
-    matches = list(Path(root).rglob(filename))
-    if len(matches) != 1:
-        raise FileNotFoundError(f"Expected exactly one {filename!r} below {root}, found {len(matches)}: {matches}")
-    return str(matches[0])
-
-
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -148,10 +141,6 @@ def resolve_paths(config: dict) -> dict:
         if len(candidates) != 1:
             raise FileNotFoundError(f"Expected one IAM-32.pickle or raw iam_dataset below {kaggle_root}; found {candidates}")
         config["dataset_path"] = str(candidates[0])
-    if config.get("use_pretrained_style_encoder", False) and not config.get("feat_model_path"):
-        config["feat_model_path"] = unique_discovery(kaggle_root, "resnet_18_pretrained.pth")
-    if not config.get("use_pretrained_style_encoder", False):
-        config["feat_model_path"] = None
     config.setdefault("unifont_path", "files/unifont.pickle")
     return config
 
@@ -263,8 +252,6 @@ def main() -> None:
     parser.add_argument("--device")
     parser.add_argument("--raw-group-by", choices=["form", "writer"])
     parser.add_argument("--forms-path", help="Official IAM forms.txt; required with raw-group-by=writer")
-    parser.add_argument("--feat-model-path")
-    parser.add_argument("--pretrained-style-encoder", action="store_true")
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
@@ -276,7 +263,7 @@ def main() -> None:
         "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "glyph_chunk_size", "device", "raw_group_by",
-        "forms_path", "feat_model_path",
+        "forms_path",
     )
     for name in override_names:
         value = getattr(cli, name)
@@ -284,8 +271,6 @@ def main() -> None:
             cfg[name] = value
     if cli.lr is not None:
         cfg.update(g_lr=cli.lr, d_lr=cli.lr, w_lr=cli.lr, ocr_lr=cli.lr)
-    if cli.pretrained_style_encoder:
-        cfg["use_pretrained_style_encoder"] = True
     if cli.no_amp:
         cfg["amp"] = False
     if cli.smoke:
@@ -327,12 +312,6 @@ def main() -> None:
             raise ValueError("stage2 requires --stage1-checkpoint")
         start_epoch, global_step = load_training_state(source, model, scaler, scheduler, cfg["device"])
         switch_stage(model, output, start_epoch, global_step, scaler, scheduler, cfg)
-    elif cfg.get("feat_model_path") and start_epoch == 0:
-        checkpoint = torch.load(cfg["feat_model_path"], map_location=cfg["device"])
-        state = checkpoint.get("model", checkpoint)
-        state["conv1.weight"] = state["conv1.weight"].mean(1, keepdim=True)
-        model.netG.Feat_Encoder.load_state_dict(state, strict=False)
-
     amp_context = (lambda: torch.autocast("cuda", dtype=torch.float16)) if scaler.is_enabled() else contextlib.nullcontext
     epochs = int(cfg.get("epochs", 7000))
     switch_epoch = int(cfg.get("switch_epoch", 3500))

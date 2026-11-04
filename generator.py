@@ -39,7 +39,6 @@ def load_checkpoint(model, checkpoint):
     return model
 
 class FakeArgs:
-    feat_model_path = 'files/resnet_18_pretrained.pth'
     label_encoder = 'default'
     save_model_path = 'saved_models'
     dataset = 'IAM'
