@@ -5,3 +5,4 @@ PyYAML>=6.0
 opencv-python-headless>=4.10
 pytest>=7
 gdown>=4.6.6
+huggingface_hub>=0.25

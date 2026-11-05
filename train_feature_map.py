@@ -65,6 +65,132 @@ def _gray_image(tensor: torch.Tensor, crop_ink: bool = False) -> Image.Image:
     return Image.fromarray(array, mode="L")
 
 
+def _feature_image(vector: torch.Tensor, size: int = 32) -> Image.Image:
+    """Turn one hidden vector into a normalized diagnostic heatmap."""
+    vector = vector.detach().float().cpu()
+    width = 32 if vector.numel() % 32 == 0 else vector.numel()
+    array = vector.reshape(-1, width).numpy()
+    low, high = float(array.min()), float(array.max())
+    if high > low:
+        array = (array - low) * (255.0 / (high - low))
+    else:
+        array = np.zeros_like(array)
+    return Image.fromarray(array.astype(np.uint8), mode="L").resize(
+        (size, size), Image.Resampling.NEAREST
+    )
+
+
+def _mean_token_cosine(tokens: torch.Tensor) -> float:
+    tokens = tokens.detach().float()
+    if tokens.shape[0] < 2:
+        return 1.0
+    tokens = torch.nn.functional.normalize(tokens, dim=-1)
+    similarities = tokens @ tokens.transpose(0, 1)
+    mask = ~torch.eye(tokens.shape[0], dtype=torch.bool, device=tokens.device)
+    return float(similarities[mask].mean().cpu())
+
+
+def save_token_preview(model: VATr, data: dict, path: str | Path, device: str,
+                       max_samples: int = 2, last_layers: int = 3,
+                       max_chars: int = 16) -> None:
+    """Save a per-character table for GNU/query/late-decoder collapse diagnosis."""
+    rng_state = capture_rng_state()
+    was_training = model.training
+    model.eval()
+    count = min(max_samples, len(data["label"]))
+    labels = data["label"][:count]
+    styles = data["simg"][:count].to(device)
+    encoded, lengths, _ = model.netconverter.encode(labels)
+    encoded = encoded[:count].to(device)
+    try:
+        with torch.no_grad():
+            diagnostic = model.netG.inspect_character_layers(styles, encoded, last_layers)
+
+        query_tokens = diagnostic["query_tokens"]
+        decoder_tokens = diagnostic["decoder_tokens"]
+        layer_images = diagnostic["layer_images"]
+        layer_numbers = diagnostic["layer_numbers"]
+        glyphs = diagnostic["glyphs"]
+        resolution = int(model.args.resolution)
+        cell = 32
+        label_width = 118
+        row_height = 36
+        sample_canvases = []
+
+        for sample_index in range(count):
+            label = labels[sample_index].decode("utf-8") if isinstance(labels[sample_index], bytes) else str(labels[sample_index])
+            length = min(int(lengths[sample_index]), len(label), max_chars)
+            if length == 0:
+                continue
+            chars = list(label[:length])
+            rows = []
+
+            if glyphs is not None:
+                glyph_cells = []
+                for char_index in range(length):
+                    glyph = glyphs[sample_index, char_index].detach().float().cpu().squeeze().numpy()
+                    if glyph.max() > 1:
+                        glyph = glyph / glyph.max()
+                    glyph_cells.append(Image.fromarray(((1.0 - glyph) * 255).astype(np.uint8), mode="L"))
+                rows.append(("GNU glyph", glyph_cells))
+
+            query_cosine = _mean_token_cosine(query_tokens[sample_index, :length])
+            rows.append((f"query feat c={query_cosine:.2f}", [
+                _feature_image(query_tokens[sample_index, char_index])
+                for char_index in range(length)
+            ]))
+
+            for layer_offset, layer_number in enumerate(layer_numbers):
+                tokens = decoder_tokens[layer_offset, sample_index, :length]
+                cosine = _mean_token_cosine(tokens)
+                rows.append((f"L{layer_number} feat c={cosine:.2f}", [
+                    _feature_image(tokens[char_index]) for char_index in range(length)
+                ]))
+                rendered_cells = []
+                rendered = layer_images[layer_offset, sample_index, 0]
+                for char_index in range(length):
+                    patch = rendered[:, char_index * resolution:(char_index + 1) * resolution]
+                    rendered_cells.append(_gray_image(patch).resize((cell, cell), Image.Resampling.BILINEAR))
+                rows.append((f"L{layer_number} render", rendered_cells))
+
+            header_height = 42
+            canvas = Image.new("L", (label_width + length * cell, header_height + len(rows) * row_height), 255)
+            draw = ImageDraw.Draw(canvas)
+            draw.text((4, 3), f"target: {label[:length]}", fill=0)
+            for char_index, char in enumerate(chars):
+                x = label_width + char_index * cell
+                draw.rectangle((x, 20, x + cell - 1, header_height - 1), outline=180)
+                draw.text((x + 12, 23), char, fill=0)
+            for row_index, (row_name, images) in enumerate(rows):
+                y = header_height + row_index * row_height
+                draw.text((4, y + 11), row_name, fill=0)
+                for char_index, image in enumerate(images):
+                    x = label_width + char_index * cell
+                    canvas.paste(image, (x, y + 2))
+                    draw.rectangle((x, y + 2, x + cell - 1, y + cell + 1), outline=180)
+            sample_canvases.append(canvas)
+
+        if not sample_canvases:
+            return
+        gap = 8
+        output = Image.new(
+            "L",
+            (max(canvas.width for canvas in sample_canvases),
+             sum(canvas.height for canvas in sample_canvases) + gap * (len(sample_canvases) - 1)),
+            255,
+        )
+        y = 0
+        for canvas in sample_canvases:
+            output.paste(canvas, (0, y))
+            y += canvas.height + gap
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        output.save(path)
+    finally:
+        model.train(was_training)
+        restore_rng_state(rng_state)
+
+
 def save_preview(model: VATr, data: dict, path: str | Path, device: str, max_samples: int = 4) -> None:
     """Save style/real/fake panels without changing model mode or RNG state."""
     rng_state = capture_rng_state()
@@ -206,6 +332,42 @@ def load_training_state(path: str | Path, model: VATr, scaler, scheduler, device
     return int(checkpoint.get("epoch", 0)), int(checkpoint.get("global_step", 0))
 
 
+def download_hf_checkpoint(repo_id: str, filename: str | None, repo_type: str,
+                           local_dir: str | Path) -> Path:
+    """Download one checkpoint from the Hub without pulling the whole repository."""
+    try:
+        import huggingface_hub
+    except ImportError as error:
+        raise RuntimeError(
+            "Hugging Face checkpoint download requires huggingface_hub. "
+            "Run scripts/kaggle_setup.sh first."
+        ) from error
+    if not filename:
+        files = huggingface_hub.HfApi().list_repo_files(repo_id=repo_id, repo_type=repo_type)
+        preferred = ("checkpoints/latest.pth", "latest.pth")
+        filename = next((candidate for candidate in preferred if candidate in files), None)
+        if filename is None:
+            candidates = [candidate for candidate in files if candidate.lower().endswith(".pth")]
+            if len(candidates) != 1:
+                raise FileNotFoundError(
+                    f"Could not auto-select one checkpoint from {repo_id}: found {candidates}. "
+                    "Pass --hf-checkpoint-file explicitly."
+                )
+            filename = candidates[0]
+        print(f"hf_checkpoint_file={filename}", flush=True)
+    local_dir = Path(local_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+    path = huggingface_hub.hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type=repo_type,
+        local_dir=str(local_dir),
+    )
+    checkpoint = Path(path)
+    print(f"hf_checkpoint={checkpoint}", flush=True)
+    return checkpoint
+
+
 def make_loaders(cfg: dict):
     common = dict(collator_resolution=cfg.get("resolution", 16), num_examples=cfg.get("num_examples", 1))
     dataset_path = Path(cfg["dataset_path"])
@@ -268,6 +430,9 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, help="Write CSV and console metrics every N batches")
     parser.add_argument("--preview-every", type=int, help="Save validation preview every N epochs; 0 disables")
     parser.add_argument("--preview-samples", type=int)
+    parser.add_argument("--token-preview-layers", type=int)
+    parser.add_argument("--token-preview-samples", type=int)
+    parser.add_argument("--token-preview-max-chars", type=int)
     parser.add_argument("--glyph-chunk-size", type=int)
     parser.add_argument("--device")
     parser.add_argument("--raw-group-by", choices=["form", "writer"])
@@ -281,6 +446,13 @@ def main() -> None:
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--preview-only", action="store_true",
+                        help="Load a checkpoint, write validation/token previews, and exit without training")
+    parser.add_argument("--hf-checkpoint-repo",
+                        help="Hugging Face repository containing the resume checkpoint")
+    parser.add_argument("--hf-checkpoint-file",
+                        help="Checkpoint path inside the Hugging Face repository")
+    parser.add_argument("--hf-repo-type", choices=["model", "dataset"], default="dataset")
     cli = parser.parse_args()
     cfg = yaml.safe_load(Path(cli.config).read_text(encoding="utf-8"))
     if cli.mode:
@@ -288,6 +460,7 @@ def main() -> None:
     override_names = (
         "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
+        "token_preview_layers", "token_preview_samples", "token_preview_max_chars",
         "glyph_chunk_size", "device", "raw_group_by",
         "forms_path", "feat_model_path",
     )
@@ -303,6 +476,17 @@ def main() -> None:
         cfg["amp"] = False
     if cli.smoke:
         cfg.update(epochs=1, max_batches_per_epoch=1, save_every=1, log_every=1, preview_every=1)
+    if cli.hf_checkpoint_repo:
+        checkpoint_dir = Path(cfg.get("output_dir", "/kaggle/working/vatr-feature-map")) / "hf"
+        cli.resume = str(download_hf_checkpoint(
+            cli.hf_checkpoint_repo, cli.hf_checkpoint_file, cli.hf_repo_type, checkpoint_dir
+        ))
+    if cli.preview_only and not cli.resume:
+        parser.error("--preview-only requires --resume or --hf-checkpoint-repo/--hf-checkpoint-file")
+    # A resume checkpoint already contains the complete style encoder. Avoid an unrelated
+    # pretrained-weight download when this run exists only to render diagnostics.
+    if cli.preview_only:
+        cfg["use_pretrained_style_encoder"] = False
     cfg = resolve_paths(cfg)
     cfg["device"] = cfg.get("device", "cuda")
     preflight(cfg)
@@ -344,6 +528,22 @@ def main() -> None:
         checkpoint = torch.load(cfg["feat_model_path"], map_location=cfg["device"])
         load_pretrained_style_encoder(model.netG.Feat_Encoder, checkpoint)
         print(f"Loaded pretrained ResNet-18 style encoder: {cfg['feat_model_path']}")
+    if cli.preview_only:
+        fixed_val = next(iter(val_loader))
+        preview_dir = output / "previews"
+        preview_path = preview_dir / f"checkpoint_epoch_{start_epoch:04d}.png"
+        token_preview_path = preview_dir / f"tokens_checkpoint_epoch_{start_epoch:04d}.png"
+        save_preview(model, fixed_val, preview_path, cfg["device"], int(cfg.get("preview_samples", 4)))
+        save_token_preview(
+            model, fixed_val, token_preview_path, cfg["device"],
+            max_samples=int(cfg.get("token_preview_samples", 2)),
+            last_layers=int(cfg.get("token_preview_layers", 3)),
+            max_chars=int(cfg.get("token_preview_max_chars", 16)),
+        )
+        print(f"preview={preview_path}", flush=True)
+        print(f"token_preview={token_preview_path}", flush=True)
+        print(f"preview_complete checkpoint_epoch={start_epoch} step={global_step}", flush=True)
+        return
     amp_context = (lambda: torch.autocast("cuda", dtype=torch.float16)) if scaler.is_enabled() else contextlib.nullcontext
     epochs = int(cfg.get("epochs", 7000))
     switch_epoch = int(cfg.get("switch_epoch", 3500))
@@ -402,6 +602,14 @@ def main() -> None:
             preview_path = output / "previews" / f"epoch_{next_epoch:04d}.png"
             save_preview(model, fixed_val, preview_path, cfg["device"], int(cfg.get("preview_samples", 4)))
             print(f"preview={preview_path}", flush=True)
+            token_preview_path = output / "previews" / f"tokens_epoch_{next_epoch:04d}.png"
+            save_token_preview(
+                model, fixed_val, token_preview_path, cfg["device"],
+                max_samples=int(cfg.get("token_preview_samples", 2)),
+                last_layers=int(cfg.get("token_preview_layers", 3)),
+                max_chars=int(cfg.get("token_preview_max_chars", 16)),
+            )
+            print(f"token_preview={token_preview_path}", flush=True)
         if next_epoch % int(cfg.get("save_every", 5)) == 0 or next_epoch == epochs:
             save(output / "latest.pth", model, next_epoch, global_step, scaler, scheduler, cfg)
         print(f"epoch_complete={next_epoch}/{epochs} step={global_step} query={model.netG.query_embed.mode}", flush=True)

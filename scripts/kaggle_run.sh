@@ -15,6 +15,14 @@ case "$ACTION" in
   resume)
     exec python train_feature_map.py --config configs/kaggle.yaml --resume "${@:2}"
     ;;
+  preview-hf)
+    HF_CHECKPOINT_REPO="${HF_CHECKPOINT_REPO:-lenhanbo/vatrcnn}"
+    HF_CHECKPOINT_FILE="${HF_CHECKPOINT_FILE:-}"
+    exec python train_feature_map.py --config configs/kaggle.yaml --preview-only \
+      --hf-checkpoint-repo "$HF_CHECKPOINT_REPO" \
+      --hf-checkpoint-file "$HF_CHECKPOINT_FILE" \
+      --hf-repo-type dataset "${@:2}"
+    ;;
   auto|stage1|reference_baseline)
     exec python train_feature_map.py --config configs/kaggle.yaml --mode "$ACTION" "${@:2}"
     ;;
@@ -26,7 +34,7 @@ case "$ACTION" in
     exec python train_feature_map.py --config configs/kaggle.yaml --mode stage2 --stage1-checkpoint "$2" "${@:3}"
     ;;
   *)
-    echo "Unknown action: $ACTION (setup|smoke|auto|stage1|stage2|reference_baseline|resume)" >&2
+    echo "Unknown action: $ACTION (setup|smoke|auto|stage1|stage2|reference_baseline|resume|preview-hf)" >&2
     exit 2
     ;;
 esac

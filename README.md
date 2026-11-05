@@ -118,6 +118,22 @@ After a notebook restart, clone the source again and use
 as a Kaggle output/version before the session ends. The setup fails early if CUDA is
 disabled or if input discovery finds zero/multiple matching files.
 
+To render diagnostics from a checkpoint stored in the Hugging Face dataset
+`lenhanbo/vatrcnn`, attach the iAM dataset to the Kaggle notebook and run:
+
+```bash
+!bash scripts/kaggle_setup.sh
+!bash scripts/kaggle_run.sh preview-hf
+```
+
+This downloads only the checkpoint, writes
+`previews/checkpoint_epoch_XXXX.png` and
+`previews/tokens_checkpoint_epoch_XXXX.png` below the configured output directory, and
+exits without an optimizer step. It prefers `checkpoints/latest.pth` or `latest.pth`,
+then falls back to the only `.pth` file in the repository. Override the Hub location
+or disambiguate multiple checkpoints with the `HF_CHECKPOINT_REPO` and
+`HF_CHECKPOINT_FILE` environment variables.
+
 The same runner supports all requested workflows:
 
 ```console
@@ -125,6 +141,7 @@ python train_feature_map.py --config configs/kaggle.yaml --mode reference_baseli
 python train_feature_map.py --config configs/kaggle.yaml --mode stage1
 python train_feature_map.py --config configs/kaggle.yaml --mode stage2 --stage1-checkpoint /path/stage1.pth
 python train_feature_map.py --config configs/kaggle.yaml --resume
+python train_feature_map.py --config configs/kaggle.yaml --resume /path/latest.pth --preview-only
 python train_feature_map.py --config configs/kaggle.yaml --smoke
 ```
 
@@ -148,6 +165,11 @@ Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
 throughput, batch time, stage, and CUDA memory) and prints the same values to the
 Kaggle console. Validation panels containing target text, the style reference,
 the real word, and the generated word are written to `OUTPUT/previews/epoch_XXXX.png`.
+Per-character diagnostic tables are written to `OUTPUT/previews/tokens_epoch_XXXX.png`.
+They show the GNU glyph, query feature, and both feature/rendered output from the last
+decoder layers; `c=` is mean off-diagonal token cosine similarity, where values near 1
+indicate token collapse. Configure them with `token_preview_layers`,
+`token_preview_samples`, and `token_preview_max_chars`.
 CSV history is append-only across resume. Use `--log-every 10` for quieter logs or
 `--preview-every 0` to disable previews.
 

@@ -329,6 +329,39 @@ class Generator(nn.Module):
         memory = self.encoder(FEAT_ST_ENC)
         return memory
 
+    def _render_character_tokens(self, tokens):
+        """Render decoder tokens shaped [batch, characters, hidden]."""
+        h = self.linear_q(tokens).contiguous()
+        h = h.view(h.size(0), h.shape[1] * 2, 4, -1)
+        h = h.permute(0, 3, 2, 1)
+        return self.DEC(h)
+
+    @torch.no_grad()
+    def inspect_character_layers(self, ST, QR, last_layers=3):
+        """Return per-character features and renderings from the last decoder layers."""
+        memory = self.compute_style(ST)
+        query_tokens = self.query_embed(QR)
+        query_pos = query_tokens.permute(1, 0, 2)
+        hs = self.decoder(torch.zeros_like(query_pos), memory, query_pos=query_pos)
+
+        count = min(max(1, int(last_layers)), hs.shape[0])
+        first = hs.shape[0] - count
+        decoder_tokens = hs[first:].permute(0, 2, 1, 3).contiguous()
+        layer_images = torch.stack([
+            self._render_character_tokens(layer_tokens)
+            for layer_tokens in decoder_tokens
+        ])
+
+        glyph_fn = getattr(self.query_embed, 'glyph_images', None)
+        glyphs = glyph_fn(QR) if glyph_fn is not None else None
+        return {
+            'query_tokens': query_tokens,
+            'decoder_tokens': decoder_tokens,
+            'layer_images': layer_images,
+            'layer_numbers': list(range(first + 1, hs.shape[0] + 1)),
+            'glyphs': glyphs,
+        }
+
     def forward(self, ST, QR, QRs=None, QR_pos=None, QRs_pos=None, mode='train'):
         # Attention Visualization Init
 

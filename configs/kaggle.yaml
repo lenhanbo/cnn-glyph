@@ -25,4 +25,7 @@ save_every: 5
 log_every: 1
 preview_every: 10
 preview_samples: 4
+token_preview_layers: 3
+token_preview_samples: 2
+token_preview_max_chars: 16
 wandb: false
