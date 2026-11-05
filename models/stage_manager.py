@@ -28,9 +28,16 @@ def capture_rng_state() -> dict:
 def restore_rng_state(state: dict) -> None:
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
+    # map_location="cuda" also maps the CPU RNG tensor to CUDA, but this API
+    # always requires a CPU ByteTensor.
+    cpu_state = state["torch"].detach().to(device="cpu", dtype=torch.uint8)
+    torch.set_rng_state(cpu_state)
     if state.get("cuda") is not None and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        # A checkpoint may have been saved with a different GPU count. Restore
+        # the states shared by both environments and leave extra devices alone.
+        for device, cuda_state in enumerate(state["cuda"][:torch.cuda.device_count()]):
+            cuda_state = cuda_state.detach().to(device="cpu", dtype=torch.uint8)
+            torch.cuda.set_rng_state(cuda_state, device=device)
 
 
 def switch_generator_to_stage2(generator, optimizer: torch.optim.Optimizer):

@@ -33,3 +33,10 @@ def test_optimizer_survives_switch_and_rng_restores(tmp_path):
     actual = (random.random(), np.random.rand(), torch.rand(1))
     assert expected[:2] == actual[:2]
     torch.testing.assert_close(expected[2], actual[2])
+
+
+def test_rng_restore_normalizes_checkpoint_tensor_to_cpu_byte():
+    state = capture_rng_state()
+    state["torch"] = state["torch"].to(dtype=torch.int16)
+    restore_rng_state(state)
+    assert torch.get_rng_state().dtype == torch.uint8
