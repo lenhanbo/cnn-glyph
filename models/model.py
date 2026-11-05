@@ -39,9 +39,10 @@ def load_pretrained_style_encoder(encoder, checkpoint):
 
 
 def ctc_loss_fp32(criterion, predictions, targets, input_lengths, target_lengths):
-    """Run CTC in FP32 because CUDA's CTC kernel has no FP16 implementation."""
+    """Convert OCR logits to FP32 log-probabilities before computing CTC."""
     with torch.autocast(device_type=predictions.device.type, enabled=False):
-        return criterion(predictions.float(), targets, input_lengths, target_lengths)
+        log_probs = torch.nn.functional.log_softmax(predictions.float(), dim=2)
+        return criterion(log_probs, targets, input_lengths, target_lengths)
 
 
 def get_rgb(x):
