@@ -17,7 +17,7 @@ num_examples: 1
 num_workers: 2
 amp: true
 g_lr: 0.00005
-d_lr: 0.00005
+d_lr: 0.000025
 w_lr: 0.00005
 ocr_lr: 0.00005
 glyph_chunk_size: 128
