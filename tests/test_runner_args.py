@@ -15,3 +15,9 @@ def test_runner_provides_all_legacy_vatr_runtime_arguments():
     assert args.num_examples == 1
     assert args.num_words == 3
     assert args.is_cycle is False
+
+
+def test_runner_accepts_writer_loss_ablation_settings():
+    args = Args({"no_writer_loss": True, "writer_loss_weight": 0.25}, num_writers=7, mode="stage1")
+    assert args.no_writer_loss is True
+    assert args.writer_loss_weight == 0.25

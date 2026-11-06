@@ -158,8 +158,20 @@ bash scripts/kaggle_run.sh auto --dataset-path /kaggle/input/my-iam/iam_dataset 
 Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-every`,
 `--log-every`, `--preview-every`, `--preview-samples`,
 `--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`,
-`--feat-model-path`, and `--no-pretrained-style-encoder`.
+`--feat-model-path`, `--no-pretrained-style-encoder`, `--no-writer-loss`,
+`--writer-loss`, and `--writer-loss-weight`.
 Command-line values take priority over `configs/kaggle.yaml`.
+
+For a writer-loss ablation that preserves the same G:D update cadence, use a fresh
+output directory:
+
+```bash
+bash scripts/kaggle_run.sh stage1 --epochs 100 --no-writer-loss \
+  --output-dir /kaggle/working/vatr-no-writer
+```
+
+With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remain zero;
+the corresponding generator/discriminator passes optimize only their GAN objectives.
 
 Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
 throughput, batch time, stage, and CUDA memory) and prints the same values to the

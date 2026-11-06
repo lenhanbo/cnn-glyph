@@ -820,6 +820,7 @@ class VATr(nn.Module):
             # total loss
             loss_total = self.loss_D + self.loss_w_real * self.args.writer_loss_weight
         else:
+            self.loss_w_real = self.loss_D.detach().new_zeros(())
             loss_total = self.loss_D
 
         # backward
@@ -999,13 +1000,18 @@ class VATr(nn.Module):
             )[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_WL))
             self.alpha_w = a.detach()
-            self.loss_w_fake = self.alpha_w * self.loss_w_fake_raw
+            self.loss_w_fake = (
+                self.alpha_w * self.loss_w_fake_raw * self.args.writer_loss_weight
+            )
             self.loss_T = self.loss_G + self.loss_w_fake
-            self.loss_grad_fake_WL = 10 ** 6 * torch.mean((self.alpha_w * grad_fake_WL) ** 2)
+            balanced_writer_grad = self.alpha_w * self.args.writer_loss_weight * grad_fake_WL
+            self.loss_grad_fake_WL = 10 ** 6 * torch.mean(balanced_writer_grad ** 2)
         else:
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, retain_graph=True)[0]
             a = self.loss_G.new_tensor(1.0)
-            self.alpha_w = a.detach()
+            self.loss_w_fake_raw = self.loss_G.detach().new_zeros(())
+            self.alpha_w = self.loss_G.detach().new_zeros(())
+            self.loss_w_fake = self.loss_G.detach().new_zeros(())
             self.loss_T = self.loss_G
 
         self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)

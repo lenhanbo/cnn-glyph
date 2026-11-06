@@ -430,6 +430,14 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--lr", type=float, help="Set G, D, OCR and writer learning rates together")
+    writer_group = parser.add_mutually_exclusive_group()
+    writer_group.add_argument("--no-writer-loss", dest="no_writer_loss", action="store_true",
+                              help="Disable writer CE on real and fake while preserving GAN update cadence")
+    writer_group.add_argument("--writer-loss", dest="no_writer_loss", action="store_false",
+                              help="Enable writer CE (overrides the YAML setting)")
+    parser.set_defaults(no_writer_loss=None)
+    parser.add_argument("--writer-loss-weight", type=float,
+                        help="Scale the dynamically balanced writer objective; default 1.0")
     parser.add_argument("--save-every", type=int)
     parser.add_argument("--log-every", type=int, help="Write CSV and console metrics every N batches")
     parser.add_argument("--preview-every", type=int, help="Save validation preview every N epochs; 0 disables")
@@ -465,7 +473,7 @@ def main() -> None:
         "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "token_preview_layers", "token_preview_samples", "token_preview_max_chars",
-        "glyph_chunk_size", "device", "raw_group_by",
+        "glyph_chunk_size", "device", "raw_group_by", "writer_loss_weight",
         "forms_path", "feat_model_path",
     )
     for name in override_names:
@@ -474,6 +482,8 @@ def main() -> None:
             cfg[name] = value
     if cli.lr is not None:
         cfg.update(g_lr=cli.lr, d_lr=cli.lr, w_lr=cli.lr, ocr_lr=cli.lr)
+    if cli.no_writer_loss is not None:
+        cfg["no_writer_loss"] = cli.no_writer_loss
     if cli.pretrained_style_encoder is not None:
         cfg["use_pretrained_style_encoder"] = cli.pretrained_style_encoder
     if cli.no_amp:
@@ -511,6 +521,11 @@ def main() -> None:
     if initial_mode == "auto":
         initial_mode = "stage1"
     args = Args(cfg, train_set.num_writers, initial_mode)
+    print(
+        f"writer_loss={'disabled' if args.no_writer_loss else 'enabled'} "
+        f"weight={args.writer_loss_weight}",
+        flush=True,
+    )
     model = VATr(args)
     amp_enabled = bool(cfg.get("amp", True) and cfg["device"].startswith("cuda"))
     try:
