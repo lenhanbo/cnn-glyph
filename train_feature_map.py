@@ -24,7 +24,11 @@ from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
 from util.pretrained import STYLE_ENCODER_FILENAME, ensure_pretrained_style_encoder
 
 
-LOSS_NAMES = ("G", "D", "Dfake", "Dreal", "OCR_fake", "OCR_real", "w_fake", "w_real", "cycle")
+LOSS_NAMES = (
+    "G", "D", "Dfake", "Dreal",
+    "OCR_fake_raw", "alpha_ocr", "OCR_fake", "OCR_real",
+    "w_fake_raw", "alpha_w", "w_fake", "w_real", "cycle",
+)
 
 
 def scalar(value) -> float:

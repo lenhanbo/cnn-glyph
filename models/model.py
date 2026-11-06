@@ -459,8 +459,12 @@ class VATr(nn.Module):
         self.loss_D = 0
         self.loss_Dfake = 0
         self.loss_Dreal = 0
+        self.loss_OCR_fake_raw = 0
+        self.alpha_ocr = 0
         self.loss_OCR_fake = 0
         self.loss_OCR_real = 0
+        self.loss_w_fake_raw = 0
+        self.alpha_w = 0
         self.loss_w_fake = 0
         self.loss_w_real = 0
         self.Lcycle = 0
@@ -701,8 +705,12 @@ class VATr(nn.Module):
         losses['D'] = self.loss_D
         losses['Dfake'] = self.loss_Dfake
         losses['Dreal'] = self.loss_Dreal
+        losses['OCR_fake_raw'] = self.loss_OCR_fake_raw
+        losses['alpha_ocr'] = self.alpha_ocr
         losses['OCR_fake'] = self.loss_OCR_fake
         losses['OCR_real'] = self.loss_OCR_real
+        losses['w_fake_raw'] = self.loss_w_fake_raw
+        losses['alpha_w'] = self.alpha_w
         losses['w_fake'] = self.loss_w_fake
         losses['w_real'] = self.loss_w_real
         losses['cycle'] = self.Lcycle
@@ -927,7 +935,8 @@ class VATr(nn.Module):
             loss_OCR_fake = ctc_loss_fp32(self.OCR_criterion, pred_fake_OCR,
                                           self.text_encode_fake.detach(), preds_size,
                                           self.len_text_fake.detach())
-            self.loss_OCR_fake = torch.mean(loss_OCR_fake[~torch.isnan(loss_OCR_fake)])
+            self.loss_OCR_fake_raw = torch.mean(loss_OCR_fake[~torch.isnan(loss_OCR_fake)])
+            self.loss_OCR_fake = self.loss_OCR_fake_raw
 
         self.loss_G = self.loss_G + self.Lcycle + self.lda1 + self.lda2 - self.KLD
 
@@ -949,7 +958,8 @@ class VATr(nn.Module):
             grad_fake_OCR = torch.autograd.grad(self.loss_OCR_fake, self.fake, create_graph=True, retain_graph=True)[0]
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_OCR))
-            self.loss_OCR_fake = a.detach() * self.loss_OCR_fake
+            self.alpha_ocr = a.detach()
+            self.loss_OCR_fake = self.alpha_ocr * self.loss_OCR_fake_raw
             self.loss_T = self.loss_G + self.loss_OCR_fake
         else:
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
@@ -983,7 +993,10 @@ class VATr(nn.Module):
         self.loss_G = loss_hinge_gen(self.netD(**{'x': self.fake}), self.len_text_fake.detach(), True).mean()
 
         if not self.args.no_writer_loss:
-            self.loss_w_fake = self.netW(self.fake, self.input['wcl'].to(self.args.device)).mean()
+            self.loss_w_fake_raw = self.netW(
+                self.fake, self.input['wcl'].to(self.args.device)
+            ).mean()
+            self.loss_w_fake = self.loss_w_fake_raw
 
         self.loss_G = self.loss_G + self.Lcycle + self.lda1 + self.lda2 - self.KLD
 
@@ -998,7 +1011,8 @@ class VATr(nn.Module):
             grad_fake_WL = torch.autograd.grad(self.loss_w_fake, self.fake, create_graph=True, retain_graph=True)[0]
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_WL))
-            self.loss_w_fake = a.detach() * self.loss_w_fake
+            self.alpha_w = a.detach()
+            self.loss_w_fake = self.alpha_w * self.loss_w_fake_raw
             self.loss_T = self.loss_G + self.loss_w_fake
         else:
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]

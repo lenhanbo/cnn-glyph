@@ -18,6 +18,10 @@ def test_metrics_csv_appends_once_and_preserves_header(tmp_path):
     assert len(rows) == 2
     assert rows[0]["G"] == "2.5"
     assert rows[1]["global_step"] == "2"
+    assert "OCR_fake_raw" in rows[0]
+    assert "alpha_ocr" in rows[0]
+    assert "w_fake_raw" in rows[0]
+    assert "alpha_w" in rows[0]
 
 
 class _Converter:

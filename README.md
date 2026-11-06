@@ -165,6 +165,9 @@ Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
 throughput, batch time, stage, and CUDA memory) and prints the same values to the
 Kaggle console. Validation panels containing target text, the style reference,
 the real word, and the generated word are written to `OUTPUT/previews/epoch_XXXX.png`.
+`OCR_fake_raw` and `w_fake_raw` are the unweighted auxiliary losses;
+`alpha_ocr` and `alpha_w` are their dynamic gradient-balancing multipliers. The legacy
+`OCR_fake` and `w_fake` columns remain the corresponding post-multiplier values.
 Per-character diagnostic tables are written to `OUTPUT/previews/tokens_epoch_XXXX.png`.
 They show the GNU glyph, query feature, and both feature/rendered output from the last
 decoder layers; `c=` is mean off-diagonal token cosine similarity, where values near 1
