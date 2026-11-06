@@ -941,45 +941,33 @@ class VATr(nn.Module):
         self.loss_G = self.loss_G + self.Lcycle + self.lda1 + self.lda2 - self.KLD
 
         if not self.args.no_ocr_loss:
-            self.loss_T = self.loss_G + self.loss_OCR_fake
-        else:
-            self.loss_T = self.loss_G
-
-        if not self.args.no_ocr_loss:
-            grad_fake_OCR = torch.autograd.grad(self.loss_OCR_fake, self.fake, retain_graph=True)[0]
-            self.loss_grad_fake_OCR = 10 ** 6 * torch.mean(grad_fake_OCR ** 2)
-
-        grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, retain_graph=True)[0]
-        self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
-
-        self.loss_T.backward(retain_graph=True)
-
-        if not self.args.no_ocr_loss:
-            grad_fake_OCR = torch.autograd.grad(self.loss_OCR_fake, self.fake, create_graph=True, retain_graph=True)[0]
-            grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
+            # autograd.grad measures both paths without accumulating parameter
+            # gradients. Only the balanced loss below is backpropagated.
+            grad_fake_OCR = torch.autograd.grad(
+                self.loss_OCR_fake_raw, self.fake, retain_graph=True
+            )[0]
+            grad_fake_adv = torch.autograd.grad(
+                self.loss_G, self.fake, retain_graph=True
+            )[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_OCR))
             self.alpha_ocr = a.detach()
             self.loss_OCR_fake = self.alpha_ocr * self.loss_OCR_fake_raw
             self.loss_T = self.loss_G + self.loss_OCR_fake
+            self.loss_grad_fake_OCR = 10 ** 6 * torch.mean((self.alpha_ocr * grad_fake_OCR) ** 2)
         else:
-            grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
-            a = 1
+            grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, retain_graph=True)[0]
+            a = self.loss_G.new_tensor(1.0)
+            self.alpha_ocr = a.detach()
             self.loss_T = self.loss_G
+
+        self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
 
         if a is None:
             print(self.loss_OCR_fake, self.loss_G, torch.std(grad_fake_adv))
         if a > 1000 or a < 0.0001:
             print(f'WARNING: alpha > 1000 or alpha < 0.0001 - alpha={a.item()}')
 
-        self.loss_T.backward(retain_graph=True)
-        if not self.args.no_ocr_loss:
-            grad_fake_OCR = torch.autograd.grad(self.loss_OCR_fake, self.fake, create_graph=False, retain_graph=True)[0]
-            self.loss_grad_fake_OCR = 10 ** 6 * torch.mean(grad_fake_OCR ** 2)
-        grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=False, retain_graph=True)[0]
-        self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
-
-        with torch.no_grad():
-            self.loss_T.backward()
+        self.loss_T.backward()
         if not self.args.no_ocr_loss:
             if any(torch.isnan(loss_OCR_fake)) or torch.isnan(self.loss_G):
                 print('loss OCR fake: ', loss_OCR_fake, ' loss_G: ', self.loss_G, ' words: ', self.words)
@@ -1001,39 +989,33 @@ class VATr(nn.Module):
         self.loss_G = self.loss_G + self.Lcycle + self.lda1 + self.lda2 - self.KLD
 
         if not self.args.no_writer_loss:
-            self.loss_T = self.loss_G + self.loss_w_fake * self.args.writer_loss_weight
-        else:
-            self.loss_T = self.loss_G
-
-        self.loss_T.backward(retain_graph=True)
-
-        if not self.args.no_writer_loss:
-            grad_fake_WL = torch.autograd.grad(self.loss_w_fake, self.fake, create_graph=True, retain_graph=True)[0]
-            grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
+            # As in the OCR branch, measure first and accumulate model gradients
+            # exactly once from the balanced objective.
+            grad_fake_WL = torch.autograd.grad(
+                self.loss_w_fake_raw, self.fake, retain_graph=True
+            )[0]
+            grad_fake_adv = torch.autograd.grad(
+                self.loss_G, self.fake, retain_graph=True
+            )[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_WL))
             self.alpha_w = a.detach()
             self.loss_w_fake = self.alpha_w * self.loss_w_fake_raw
             self.loss_T = self.loss_G + self.loss_w_fake
+            self.loss_grad_fake_WL = 10 ** 6 * torch.mean((self.alpha_w * grad_fake_WL) ** 2)
         else:
-            grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=True, retain_graph=True)[0]
-            a = 1
+            grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, retain_graph=True)[0]
+            a = self.loss_G.new_tensor(1.0)
+            self.alpha_w = a.detach()
             self.loss_T = self.loss_G
+
+        self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
 
         if a is None:
             print(self.loss_w_fake, self.loss_G, torch.std(grad_fake_adv))
         if a > 1000 or a < 0.0001:
             print(f'WARNING: alpha > 1000 or alpha < 0.0001 - alpha={a.item()}')
 
-        self.loss_T.backward(retain_graph=True)
-
-        if not self.args.no_writer_loss:
-            grad_fake_WL = torch.autograd.grad(self.loss_w_fake, self.fake, create_graph=False, retain_graph=True)[0]
-            self.loss_grad_fake_WL = 10 ** 6 * torch.mean(grad_fake_WL ** 2)
-        grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, create_graph=False, retain_graph=True)[0]
-        self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
-
-        with torch.no_grad():
-            self.loss_T.backward()
+        self.loss_T.backward()
 
     def backward_G(self):
         self.opt.gb_alpha = 0.7

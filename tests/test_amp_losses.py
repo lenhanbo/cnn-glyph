@@ -1,7 +1,9 @@
+import inspect
+
 import torch
 from torch import nn
 
-from models.model import ctc_loss_fp32
+from models.model import VATr, ctc_loss_fp32
 
 
 def test_ctc_loss_is_forced_to_fp32_and_backpropagates_to_half_logits():
@@ -20,3 +22,12 @@ def test_ctc_loss_is_forced_to_fp32_and_backpropagates_to_half_logits():
     loss.backward()
     assert raw.grad is not None
     assert torch.isfinite(raw.grad).all()
+
+
+def test_active_generator_auxiliary_branches_backward_exactly_once():
+    ocr_source = inspect.getsource(VATr.backward_G_only)
+    writer_source = inspect.getsource(VATr.backward_G_WL)
+    assert ocr_source.count(".backward(") == 1
+    assert writer_source.count(".backward(") == 1
+    assert "create_graph=True" not in ocr_source
+    assert "create_graph=True" not in writer_source
