@@ -159,7 +159,8 @@ Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-e
 `--log-every`, `--preview-every`, `--preview-samples`,
 `--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`,
 `--feat-model-path`, `--no-pretrained-style-encoder`, `--no-writer-loss`,
-`--writer-loss`, and `--writer-loss-weight`.
+`--writer-loss`, `--writer-loss-weight`, `--ocr-checkpoint`, `--freeze-ocr`,
+and `--finetune-ocr`.
 Command-line values take priority over `configs/kaggle.yaml`.
 
 For a clean writer-loss ablation, use a fresh output directory:
@@ -172,6 +173,11 @@ bash scripts/kaggle_run.sh stage1 --epochs 100 --no-writer-loss \
 With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remain zero.
 Every batch runs exactly one `D + OCR_real` update followed by one
 `G_adv + alpha_ocr * OCR_fake_raw` update; the writer-free G:D ratio is therefore 1:1.
+
+To use the CRNN contained in the official full VATr checkpoint as a fixed OCR
+teacher, download `vatr.pth` from the official VATr GitHub release and start a
+fresh run with `--ocr-checkpoint /path/to/vatr.pth --freeze-ocr`. The loader
+extracts only `netOCR`; generator and discriminator weights are not imported.
 
 Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
 throughput, batch time, stage, and CUDA memory) and prints the same values to the

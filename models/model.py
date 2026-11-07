@@ -38,6 +38,32 @@ def load_pretrained_style_encoder(encoder, checkpoint):
         )
 
 
+def load_pretrained_ocr(ocr, checkpoint):
+    """Load only netOCR from either a full VATr or standalone OCR checkpoint."""
+    state = checkpoint.get('model', checkpoint.get('state_dict', checkpoint))
+    if not isinstance(state, dict):
+        raise TypeError("OCR checkpoint must contain a state dictionary")
+
+    # Accept DataParallel full-model keys (module.netOCR.*), regular VATr keys
+    # (netOCR.*), and an already extracted standalone OCR state dictionary.
+    state = {
+        (key[7:] if key.startswith('module.') else key): value
+        for key, value in state.items()
+    }
+    prefixed = {
+        key[len('netOCR.'):]: value
+        for key, value in state.items()
+        if key.startswith('netOCR.')
+    }
+    ocr_state = prefixed or state
+    missing, unexpected = ocr.load_state_dict(ocr_state, strict=False)
+    if missing or unexpected:
+        raise RuntimeError(
+            "Incompatible OCR checkpoint (architecture/alphabet must match): "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
 def ctc_loss_fp32(criterion, predictions, targets, input_lengths, target_lengths):
     """Convert OCR logits to FP32 log-probabilities before computing CTC."""
     with torch.autocast(device_type=predictions.device.type, enabled=False):
@@ -1095,10 +1121,15 @@ class VATr(nn.Module):
     def optimize_D_OCR(self):
         self.forward()
         self.set_requires_grad([self.netD], True)
-        self.set_requires_grad([self.netOCR], True)
+        ocr_trainable = not self.args.no_ocr_loss and not self.args.freeze_ocr
+        self.set_requires_grad([self.netOCR], ocr_trainable)
+        if self.args.freeze_ocr:
+            # Freezing parameters alone is insufficient because CRNN contains
+            # BatchNorm layers whose running statistics otherwise keep moving.
+            self.netOCR.eval()
         self.optimizer_D.zero_grad()
-        # if self.opt.OCR_init in ['glorot', 'xavier', 'ortho', 'N02']:
-        self.optimizer_OCR.zero_grad()
+        if ocr_trainable:
+            self.optimizer_OCR.zero_grad()
         self.backward_D_OCR()
 
     def optimize_OCR(self):
@@ -1117,7 +1148,8 @@ class VATr(nn.Module):
     def optimize_D_OCR_step(self):
         self.optimizer_D.step()
 
-        self.optimizer_OCR.step()
+        if not self.args.no_ocr_loss and not self.args.freeze_ocr:
+            self.optimizer_OCR.step()
         self.optimizer_D.zero_grad()
         self.optimizer_OCR.zero_grad()
 

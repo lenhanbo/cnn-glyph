@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 
 from data.dataset import TextDataset, TextDatasetval
 from data.raw_iam_dataset import RawIAMDataset
-from models.model import VATr, load_pretrained_style_encoder
+from models.model import VATr, load_pretrained_ocr, load_pretrained_style_encoder
 from models.stage_manager import capture_rng_state, checkpoint_payload, load_checkpoint_file, restore_rng_state, switch_generator_to_stage2
 from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
 from util.pretrained import STYLE_ENCODER_FILENAME, ensure_pretrained_style_encoder
@@ -323,7 +323,7 @@ class Args:
             batch_size=8, num_examples=1, tn_hidden_dim=512, tn_dropout=0.1, tn_nheads=8,
             tn_dim_feedforward=512, tn_enc_layers=3, tn_dec_layers=3, g_lr=5e-5, d_lr=5e-5,
             w_lr=5e-5, ocr_lr=5e-5, no_writer_loss=False, writer_loss_weight=1.0,
-            no_ocr_loss=False, is_seq=True, num_words=3, is_cycle=False, is_kld=False,
+            no_ocr_loss=False, freeze_ocr=False, is_seq=True, num_words=3, is_cycle=False, is_kld=False,
             add_noise=False, all_chars=False,
             query_input="unifont", query_linear=True, glyph_chunk_size=128,
         )
@@ -458,6 +458,13 @@ def main() -> None:
     parser.set_defaults(no_writer_loss=None)
     parser.add_argument("--writer-loss-weight", type=float,
                         help="Scale the dynamically balanced writer objective; default 1.0")
+    parser.add_argument("--ocr-checkpoint",
+                        help="Compatible standalone OCR or full VATr checkpoint")
+    ocr_group = parser.add_mutually_exclusive_group()
+    ocr_group.add_argument("--freeze-ocr", dest="freeze_ocr", action="store_true", default=None,
+                           help="Keep pretrained OCR fixed (recommended)")
+    ocr_group.add_argument("--finetune-ocr", dest="freeze_ocr", action="store_false",
+                           help="Continue updating OCR on real IAM words")
     parser.add_argument("--save-every", type=int)
     parser.add_argument("--log-every", type=int, help="Write CSV and console metrics every N batches")
     parser.add_argument("--preview-every", type=int, help="Save validation preview every N epochs; 0 disables")
@@ -494,7 +501,7 @@ def main() -> None:
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "token_preview_layers", "token_preview_samples", "token_preview_max_chars",
         "glyph_chunk_size", "device", "raw_group_by", "writer_loss_weight",
-        "forms_path", "feat_model_path",
+        "forms_path", "feat_model_path", "ocr_checkpoint",
     )
     for name in override_names:
         value = getattr(cli, name)
@@ -504,6 +511,12 @@ def main() -> None:
         cfg.update(g_lr=cli.lr, d_lr=cli.lr, w_lr=cli.lr, ocr_lr=cli.lr)
     if cli.no_writer_loss is not None:
         cfg["no_writer_loss"] = cli.no_writer_loss
+    if cli.freeze_ocr is not None:
+        cfg["freeze_ocr"] = cli.freeze_ocr
+    elif cli.ocr_checkpoint:
+        # A pretrained OCR is most useful as a stationary teacher. Users can
+        # explicitly opt back into online fine-tuning with --finetune-ocr.
+        cfg["freeze_ocr"] = True
     if cli.pretrained_style_encoder is not None:
         cfg["use_pretrained_style_encoder"] = cli.pretrained_style_encoder
     if cli.no_amp:
@@ -543,9 +556,12 @@ def main() -> None:
     args = Args(cfg, train_set.num_writers, initial_mode)
     print(
         f"writer_loss={'disabled' if args.no_writer_loss else 'enabled'} "
-        f"weight={args.writer_loss_weight}",
+        f"weight={args.writer_loss_weight} "
+        f"ocr={'frozen' if args.freeze_ocr else 'trainable'}",
         flush=True,
     )
+    if args.freeze_ocr and not cfg.get("ocr_checkpoint") and resume_header is None and mode != "stage2":
+        raise ValueError("freeze_ocr requires --ocr-checkpoint for a fresh run")
     model = VATr(args)
     amp_enabled = bool(cfg.get("amp", True) and cfg["device"].startswith("cuda"))
     try:
@@ -567,6 +583,17 @@ def main() -> None:
         checkpoint = torch.load(cfg["feat_model_path"], map_location=cfg["device"])
         load_pretrained_style_encoder(model.netG.Feat_Encoder, checkpoint)
         print(f"Loaded pretrained ResNet-18 style encoder: {cfg['feat_model_path']}")
+    if cfg.get("ocr_checkpoint") and resume_header is None and mode != "stage2":
+        ocr_checkpoint = load_checkpoint_file(cfg["ocr_checkpoint"], map_location=cfg["device"])
+        load_pretrained_ocr(model.netOCR, ocr_checkpoint)
+        if args.freeze_ocr:
+            model.set_requires_grad(model.netOCR, False)
+            model.netOCR.eval()
+        print(
+            f"Loaded pretrained OCR: {cfg['ocr_checkpoint']} "
+            f"({'frozen' if args.freeze_ocr else 'fine-tuned'})",
+            flush=True,
+        )
     if cli.preview_only:
         fixed_val = next(iter(val_loader))
         preview_dir = output / "previews"

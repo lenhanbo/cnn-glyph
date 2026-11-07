@@ -20,6 +20,8 @@ g_lr: 0.00005
 d_lr: 0.000025
 w_lr: 0.00005
 ocr_lr: 0.00005
+ocr_checkpoint: null
+freeze_ocr: false
 no_writer_loss: false
 writer_loss_weight: 1.0
 glyph_chunk_size: 128
