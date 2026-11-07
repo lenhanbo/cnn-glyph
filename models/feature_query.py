@@ -135,6 +135,9 @@ class FeatureMapQuery(nn.Module):
         self.chunk_size = int(chunk_size)
         self.spatial = SpatialAttentionPool()
         self.projection = nn.Linear(64, out_dim)
+        self.cnn_norm = nn.LayerNorm(out_dim)
+        self.raw_norm = nn.LayerNorm(out_dim)
+        self.fuse_norm = nn.LayerNorm(out_dim)
         self.cache_metadata: dict[str, Any] = {}
         if mode == "stage1":
             if unifont_path is None:
@@ -142,10 +145,15 @@ class FeatureMapQuery(nn.Module):
             glyphs, self.cache_metadata = load_gnu_glyph_bank(unifont_path)
             self.register_buffer("glyph_bank", glyphs, persistent=True)
             self.cnn = LiteGlyphCNN()
+            # Preserve spatial glyph identity when the CNN branch is compressed
+            # by global mean pooling. A shared bias would make characters more
+            # alike, so the residual projection intentionally has no bias.
+            self.raw_projection = nn.Linear(32 * 32, out_dim, bias=False)
         else:
             if feature_maps is None:
                 feature_maps = torch.zeros(VOCAB_SIZE_WITH_PADDING, 64, 8, 8)
             self._install_feature_maps(feature_maps)
+            self._install_raw_embeddings(torch.zeros(VOCAB_SIZE_WITH_PADDING, out_dim))
 
     def _install_feature_maps(self, maps: torch.Tensor) -> None:
         if tuple(maps.shape) != (VOCAB_SIZE_WITH_PADDING, 64, 8, 8):
@@ -154,6 +162,15 @@ class FeatureMapQuery(nn.Module):
         maps[0].zero_()
         self.feature_maps = nn.Parameter(maps)
         self.feature_maps.register_hook(self._zero_padding_gradient)
+
+    def _install_raw_embeddings(self, embeddings: torch.Tensor) -> None:
+        expected = (VOCAB_SIZE_WITH_PADDING, self.projection.out_features)
+        if tuple(embeddings.shape) != expected:
+            raise ValueError(f"raw residual table must be {list(expected)}, got {list(embeddings.shape)}")
+        embeddings = embeddings.detach().float().clone()
+        embeddings[0].zero_()
+        self.raw_embeddings = nn.Parameter(embeddings)
+        self.raw_embeddings.register_hook(self._zero_padding_gradient)
 
     @staticmethod
     def _zero_padding_gradient(gradient: torch.Tensor) -> torch.Tensor:
@@ -172,14 +189,28 @@ class FeatureMapQuery(nn.Module):
             return self.cnn(self.glyph_bank[ids])
         return self.feature_maps[ids]
 
+    def _raw_for_ids(self, ids: torch.Tensor) -> torch.Tensor:
+        if self.mode == "stage1":
+            glyphs = self.glyph_bank[ids]
+            return self.raw_projection(glyphs.flatten(1))
+        return self.raw_embeddings[ids]
+
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         self._validate_ids(ids)
         flat = ids.reshape(-1)
         output = None
         valid_positions = torch.nonzero(flat != 0, as_tuple=False).flatten()
         for positions in valid_positions.split(self.chunk_size):
-            maps = self._maps_for_ids(flat[positions])
-            embeddings = self.projection(self.spatial(maps))
+            selected_ids = flat[positions]
+            maps = self._maps_for_ids(selected_ids)
+            cnn_embeddings = self.projection(self.spatial(maps))
+            raw_embeddings = self._raw_for_ids(selected_ids).to(dtype=cnn_embeddings.dtype)
+            # Equalize the two branches before addition; without this, the
+            # mean-pooled CNN vector is about 3x larger and overwhelms the
+            # identity-preserving raw-glyph residual at initialization.
+            embeddings = self.fuse_norm(
+                self.cnn_norm(cnn_embeddings) + self.raw_norm(raw_embeddings)
+            )
             if output is None:
                 # Under AMP embeddings are FP16/BF16 while projection weights
                 # remain FP32. Build padding/output in the computed dtype so
@@ -206,12 +237,33 @@ class FeatureMapQuery(nn.Module):
         return table
 
     @torch.no_grad()
+    def materialize_raw(self, chunk_size: int | None = None) -> torch.Tensor:
+        if self.mode != "stage1":
+            return self.raw_embeddings.detach().float().clone()
+        was_training = self.training
+        self.eval()
+        size = chunk_size or self.chunk_size
+        device = self.glyph_bank.device
+        table = torch.zeros(
+            VOCAB_SIZE_WITH_PADDING, self.projection.out_features,
+            device=device, dtype=torch.float32,
+        )
+        projection = self.raw_projection.float()
+        for ids in torch.arange(1, VOCAB_SIZE_WITH_PADDING, device=device).split(size):
+            table[ids] = projection(self.glyph_bank[ids].float().flatten(1))
+        self.train(was_training)
+        return table
+
+    @torch.no_grad()
     def switch_to_stage2(self) -> torch.Tensor:
         """Materialize in FP32 and remove every GNU/CNN dependency in-place."""
         table = self.materialize()
+        raw_table = self.materialize_raw()
         del self.cnn
+        del self.raw_projection
         del self.glyph_bank
         self._install_feature_maps(table)
+        self._install_raw_embeddings(raw_table)
         self.mode = "stage2"
         self.cache_metadata = {}
         return table
@@ -220,6 +272,7 @@ class FeatureMapQuery(nn.Module):
         if self.mode == "stage2":
             with torch.no_grad():
                 self.feature_maps[0].zero_()
+                self.raw_embeddings[0].zero_()
 
     def glyph_images(self, ids: torch.Tensor) -> torch.Tensor | None:
         if self.mode != "stage1":

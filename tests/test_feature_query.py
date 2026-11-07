@@ -61,11 +61,15 @@ def test_stage_gradients_and_materialization_equivalence(tmp_path):
     torch.testing.assert_close(before.detach(), after.detach(), rtol=0, atol=1e-6)
     after.sum().backward()
     assert module.feature_maps.grad is not None
+    assert module.raw_embeddings.grad is not None
     assert torch.count_nonzero(module.feature_maps.grad[0]) == 0
+    assert torch.count_nonzero(module.raw_embeddings.grad[0]) == 0
     assert not hasattr(module, "cnn")
+    assert not hasattr(module, "raw_projection")
     assert not hasattr(module, "glyph_bank")
     keys = module.state_dict().keys()
-    assert not any(key.startswith("cnn.") or key == "glyph_bank" for key in keys)
+    assert not any(key.startswith("cnn.") or key.startswith("raw_projection.") or key == "glyph_bank"
+                   for key in keys)
     assert any(key.startswith("spatial.pos_cnn.") for key in keys)  # PosCNN intentionally survives stage 2.
 
     state_path = tmp_path / "stage2.pt"
@@ -73,6 +77,17 @@ def test_stage_gradients_and_materialization_equivalence(tmp_path):
     no_gnu = FeatureMapQuery(mode="stage2")
     no_gnu.load_state_dict(torch.load(state_path, weights_only=True))
     torch.testing.assert_close(after.detach(), no_gnu(ids).detach())
+
+
+def test_raw_glyph_residual_keeps_distinct_characters_separated():
+    torch.manual_seed(7)
+    module = FeatureMapQuery(mode="stage1", unifont_path=UNIFONT).eval()
+    ids = torch.tensor([[char_to_id()[char] for char in "The"]])
+    with torch.no_grad():
+        tokens = torch.nn.functional.normalize(module(ids)[0], dim=-1)
+    pairwise = tokens @ tokens.transpose(0, 1)
+    off_diagonal = pairwise[~torch.eye(3, dtype=torch.bool)]
+    assert float(off_diagonal.mean()) < 0.8
 
 
 def test_out_of_vocabulary_is_an_error():

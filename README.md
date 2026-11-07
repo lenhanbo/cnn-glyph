@@ -174,6 +174,14 @@ With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remai
 Every batch runs exactly one `D + OCR_real` update followed by one
 `G_adv + alpha_ocr * OCR_fake_raw` update; the writer-free G:D ratio is therefore 1:1.
 
+In feature-query modes, character identity is protected by two residual paths:
+the mean-pooled Lite CNN embedding is fused with a bias-free projection of the
+raw 32x32 GNU glyph, and the resulting query is added back after Transformer
+style fusion. Sinusoidal word-position encodings are included in attention.
+At the stage-1 to stage-2 transition, the raw-glyph residual is materialized as
+a `[130, 512]` table together with the CNN feature maps, so GNU/CNN dependencies
+can still be removed without changing the query output.
+
 To use the CRNN contained in the official full VATr checkpoint as a fixed OCR
 teacher, download `vatr.pth` from the official VATr GitHub release and start a
 fresh run with `--ocr-checkpoint /path/to/vatr.pth --freeze-ocr`. The loader

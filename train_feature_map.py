@@ -420,7 +420,12 @@ def switch_stage(model: VATr, output: Path, epoch: int, global_step: int, scaler
     with torch.no_grad():
         before = query(fixed_ids).float()
     table = query.materialize().cpu()
-    torch.save({"feature_maps": table, "shape": list(table.shape)}, output / "feature_maps.pt")
+    raw_table = query.materialize_raw().cpu()
+    torch.save({
+        "feature_maps": table,
+        "raw_embeddings": raw_table,
+        "shape": list(table.shape),
+    }, output / "feature_maps.pt")
     model.optimizer_G = switch_generator_to_stage2(model.netG, model.optimizer_G)
     model.optimizers[0] = model.optimizer_G
     scheduler.optimizer = model.optimizer_G

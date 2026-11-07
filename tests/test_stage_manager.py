@@ -25,6 +25,7 @@ def test_optimizer_survives_switch_and_rng_restores(tmp_path):
     optimizer = switch_generator_to_stage2(generator, optimizer)
     assert optimizer.state[generator.downstream.weight]["step"] == downstream_step
     assert any(generator.query_embed.feature_maps is p for g in optimizer.param_groups for p in g["params"])
+    assert any(generator.query_embed.raw_embeddings is p for g in optimizer.param_groups for p in g["params"])
 
     random.seed(11); np.random.seed(11); torch.manual_seed(11)
     state = capture_rng_state()

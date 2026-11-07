@@ -175,6 +175,7 @@ class Generator(nn.Module):
 
         # self.query_embed = nn.Embedding(self.args.vocab_size, self.args.tn_hidden_dim)
         feature_mode = getattr(self.args, 'feature_mode', 'reference_baseline')
+        self.use_feature_query_residual = feature_mode != 'reference_baseline'
         if feature_mode == 'reference_baseline':
             # Preserve official VATr parameter names for old checkpoints.
             self.query_embed = UnifontModule(
@@ -194,6 +195,8 @@ class Generator(nn.Module):
             )
         # self.query_embed = LearnableModule(self.args.tn_dim_feedforward)
         self.pos_encoder = PositionalEncoding1D(self.args.tn_hidden_dim)
+        if self.use_feature_query_residual:
+            self.content_norm = nn.LayerNorm(self.args.tn_hidden_dim)
 
         self.linear_q = nn.Linear(self.args.tn_dim_feedforward, self.args.tn_dim_feedforward * 8)
 
@@ -252,14 +255,9 @@ class Generator(nn.Module):
 
         memory = self.encoder(FEAT_ST_ENC)
 
-        # QR_EMB = self.query_embed.weight[QR].permute(1, 0, 2)
-        QR_EMB = self.query_embed(QR).permute(1, 0, 2)
-
-        tgt = torch.zeros_like(QR_EMB)
-        hs = self.decoder(tgt, memory, query_pos=QR_EMB)
-        # hs = self.decoder(QR_EMB, memory, query_pos=query_pos)
-
-        h = hs.transpose(1, 2)[-1]  # torch.cat([hs.transpose(1, 2)[-1], QR_EMB.permute(1,0,2)], -1)
+        query_tokens = self.query_embed(QR)
+        hs = self._decode_character_tokens(memory, query_tokens)
+        h = self._fuse_character_residual(hs.transpose(1, 2)[-1], query_tokens)
 
         if self.args.add_noise:
             h = h + self.noise.sample(h.size()).squeeze(-1).to(self.args.device)
@@ -309,17 +307,8 @@ class Generator(nn.Module):
             if QRS_pos is not None:
                 QR_pos = [QRS_pos[i] for _ in range(QRS.shape[0])]
 
-            # if self.args.all_chars:
-            #     QR_EMB = self.query_embed.weight.repeat(self.args.self.args.batch_size, 1, 1).permute(1, 0, 2)
-            # else:
-            #     QR_EMB = self.query_embed.weight[QR].permute(1, 0, 2)
-            QR_EMB = self.query_embed(QR).permute(1, 0, 2)
-
-            tgt = torch.zeros_like(QR_EMB)
-            # query_pos = self.pos_encoder(QR_EMB)
-
-            # hs = self.decoder(tgt, memory, query_pos=QR_EMB)
-            hs = self.decoder(tgt, memory, query_pos=QR_EMB)
+            query_tokens = self.query_embed(QR)
+            hs = self._decode_character_tokens(memory, query_tokens)
 
             if self.args.is_kld:
                 Dx = hs[0].permute(1, 0, 2)
@@ -329,7 +318,7 @@ class Generator(nn.Module):
 
                 hs = self.reparameterize(hs_mu, hs_logvar).permute(1, 0, 2).unsqueeze(0)
 
-            h = hs.transpose(1, 2)[-1]  # torch.cat([hs.transpose(1, 2)[-1], QR_EMB.permute(1,0,2)], -1)
+            h = self._fuse_character_residual(hs.transpose(1, 2)[-1], query_tokens)
             if self.args.add_noise:
                 h = h + self.noise.sample(h.size()).squeeze(-1).to(self.args.device)
 
@@ -363,17 +352,39 @@ class Generator(nn.Module):
         h = h.permute(0, 3, 2, 1)
         return self.DEC(h)
 
+    def _decode_character_tokens(self, memory, query_tokens):
+        """Run style fusion while using glyph identity plus word position as the query."""
+        if self.use_feature_query_residual:
+            position = self.pos_encoder(query_tokens)
+            # Padding queries are exact zeros in FeatureMapQuery. Do not turn
+            # them into active tokens merely by adding a positional encoding.
+            valid = query_tokens.detach().abs().sum(dim=-1, keepdim=True).ne(0)
+            position = position * valid.to(dtype=position.dtype)
+            query_pos = (query_tokens + position).permute(1, 0, 2)
+        else:
+            # Keep the reference-baseline path byte-for-byte compatible with
+            # the official VATr conditioning scheme.
+            query_pos = query_tokens.permute(1, 0, 2)
+        return self.decoder(torch.zeros_like(query_pos), memory, query_pos=query_pos)
+
+    def _fuse_character_residual(self, decoder_tokens, query_tokens):
+        """Keep content identity in the token stream even if attention collapses."""
+        if not self.use_feature_query_residual:
+            return decoder_tokens
+        return self.content_norm(decoder_tokens + query_tokens)
+
     @torch.no_grad()
     def inspect_character_layers(self, ST, QR, last_layers=3):
         """Return per-character features and renderings from the last decoder layers."""
         memory = self.compute_style(ST)
         query_tokens = self.query_embed(QR)
-        query_pos = query_tokens.permute(1, 0, 2)
-        hs = self.decoder(torch.zeros_like(query_pos), memory, query_pos=query_pos)
+        hs = self._decode_character_tokens(memory, query_tokens)
 
         count = min(max(1, int(last_layers)), hs.shape[0])
         first = hs.shape[0] - count
-        decoder_tokens = hs[first:].permute(0, 2, 1, 3).contiguous()
+        decoder_tokens = self._fuse_character_residual(
+            hs[first:].permute(0, 2, 1, 3), query_tokens.unsqueeze(0)
+        ).contiguous()
         layer_images = torch.stack([
             self._render_character_tokens(layer_tokens)
             for layer_tokens in decoder_tokens
@@ -408,16 +419,9 @@ class Generator(nn.Module):
 
         memory = self.compute_style(ST)
 
-        # QR_EMB = self.query_embed.weight[QR].permute(1, 0, 2)
-        QR_EMB = self.query_embed(QR).permute(1, 0, 2)
-
-        # query_pos = self.pos_encoder(QR_EMB)
-
-        tgt = torch.zeros_like(QR_EMB)
-        hs = self.decoder(tgt, memory, query_pos=QR_EMB)
-        # hs = self.decoder(QR_EMB, memory, query_pos=query_pos)
-
-        h = hs.transpose(1, 2)[-1]  # torch.cat([hs.transpose(1, 2)[-1], QR_EMB.permute(1,0,2)], -1)
+        query_tokens = self.query_embed(QR)
+        hs = self._decode_character_tokens(memory, query_tokens)
+        h = self._fuse_character_residual(hs.transpose(1, 2)[-1], query_tokens)
 
         if self.args.add_noise:
             h = h + self.noise.sample(h.size()).squeeze(-1).to(self.args.device)
