@@ -162,16 +162,16 @@ Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-e
 `--writer-loss`, and `--writer-loss-weight`.
 Command-line values take priority over `configs/kaggle.yaml`.
 
-For a writer-loss ablation that preserves the same G:D update cadence, use a fresh
-output directory:
+For a clean writer-loss ablation, use a fresh output directory:
 
 ```bash
 bash scripts/kaggle_run.sh stage1 --epochs 100 --no-writer-loss \
   --output-dir /kaggle/working/vatr-no-writer
 ```
 
-With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remain zero;
-the corresponding generator/discriminator passes optimize only their GAN objectives.
+With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remain zero.
+Every batch runs exactly one `D + OCR_real` update followed by one
+`G_adv + alpha_ocr * OCR_fake_raw` update; the writer-free G:D ratio is therefore 1:1.
 
 Training appends batch metrics to `OUTPUT/metrics.csv` (losses, learning rates,
 throughput, batch time, stage, and CUDA memory) and prints the same values to the

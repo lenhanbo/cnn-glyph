@@ -31,6 +31,26 @@ LOSS_NAMES = (
 )
 
 
+def optimization_plan(no_writer_loss: bool, batch_index: int, cfg: dict) -> tuple[str, ...]:
+    """Return the optimizer phases for one batch.
+
+    The writer-free ablation is a clean 1D:1G schedule. The writer-enabled
+    path preserves the original VATr cadence.
+    """
+    if no_writer_loss:
+        return ("d_ocr", "g_ocr")
+    phases = []
+    if batch_index % int(cfg.get("num_critic_gocr_train", 2)) == 0:
+        phases.append("g_ocr")
+    if batch_index % int(cfg.get("num_critic_docr_train", 1)) == 0:
+        phases.append("d_ocr")
+    if batch_index % int(cfg.get("num_critic_gwl_train", 2)) == 0:
+        phases.append("g_writer")
+    if batch_index % int(cfg.get("num_critic_dwl_train", 1)) == 0:
+        phases.append("d_writer")
+    return tuple(phases)
+
+
 def scalar(value) -> float:
     if torch.is_tensor(value):
         return float(value.detach().float().mean().cpu())
@@ -579,14 +599,16 @@ def main() -> None:
         for batch_index, data in enumerate(train_loader):
             batch_started = time.perf_counter()
             with amp_context():
-                if batch_index % int(cfg.get("num_critic_gocr_train", 2)) == 0:
-                    model._set_input(data); model.optimize_G_only(); model.optimize_G_step()
-                if batch_index % int(cfg.get("num_critic_docr_train", 1)) == 0:
-                    model._set_input(data); model.optimize_D_OCR(); model.optimize_D_OCR_step()
-                if batch_index % int(cfg.get("num_critic_gwl_train", 2)) == 0:
-                    model._set_input(data); model.optimize_G_WL(); model.optimize_G_step()
-                if batch_index % int(cfg.get("num_critic_dwl_train", 1)) == 0:
-                    model._set_input(data); model.optimize_D_WL(); model.optimize_D_WL_step()
+                for phase in optimization_plan(model.args.no_writer_loss, batch_index, cfg):
+                    model._set_input(data)
+                    if phase == "d_ocr":
+                        model.optimize_D_OCR(); model.optimize_D_OCR_step()
+                    elif phase == "g_ocr":
+                        model.optimize_G_only(); model.optimize_G_step()
+                    elif phase == "g_writer":
+                        model.optimize_G_WL(); model.optimize_G_step()
+                    elif phase == "d_writer":
+                        model.optimize_D_WL(); model.optimize_D_WL_step()
             if model.netG.query_embed.mode == "stage2":
                 model.netG.query_embed.enforce_padding_zero()
             global_step += 1

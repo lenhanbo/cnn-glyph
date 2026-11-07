@@ -1,4 +1,4 @@
-from train_feature_map import Args
+from train_feature_map import Args, optimization_plan
 
 
 def test_runner_provides_all_legacy_vatr_runtime_arguments():
@@ -21,3 +21,14 @@ def test_runner_accepts_writer_loss_ablation_settings():
     args = Args({"no_writer_loss": True, "writer_loss_weight": 0.25}, num_writers=7, mode="stage1")
     assert args.no_writer_loss is True
     assert args.writer_loss_weight == 0.25
+
+
+def test_writer_free_schedule_is_one_discriminator_then_one_generator_every_batch():
+    assert optimization_plan(True, 0, {}) == ("d_ocr", "g_ocr")
+    assert optimization_plan(True, 1, {}) == ("d_ocr", "g_ocr")
+    assert optimization_plan(True, 27, {}) == ("d_ocr", "g_ocr")
+
+
+def test_writer_enabled_schedule_preserves_original_cadence():
+    assert optimization_plan(False, 0, {}) == ("g_ocr", "d_ocr", "g_writer", "d_writer")
+    assert optimization_plan(False, 1, {}) == ("d_ocr", "d_writer")
