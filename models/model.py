@@ -1170,6 +1170,52 @@ class VATr(nn.Module):
         self.optimizer_D.zero_grad()
         self.optimizer_OCR.zero_grad()
 
+    def optimize_OCR_real_only(self):
+        """Warm up OCR on real IAM words without executing G, D, or writer nets."""
+        self.real = self.input['img'].to(self.args.device)
+        self.label = self.input['label']
+        self.text_encode, self.len_text, self.encode_pos = self.netconverter.encode(self.label)
+        self.text_encode = self.text_encode.to(self.args.device).detach()
+        self.len_text = self.len_text.detach()
+
+        self.netOCR.train()
+        self.set_requires_grad(self.netOCR, True)
+        self.optimizer_OCR.zero_grad()
+        self.pred_real_OCR = self.netOCR(self.real.detach())
+        batch_size = len(self.label)
+        preds_size = torch.full(
+            (batch_size,), self.pred_real_OCR.size(0), dtype=torch.long
+        )
+        losses = ctc_loss_fp32(
+            self.OCR_criterion, self.pred_real_OCR, self.text_encode,
+            preds_size, self.len_text,
+        )
+        finite = torch.isfinite(losses)
+        if not finite.any():
+            raise FloatingPointError("OCR warm-up produced no finite CTC losses")
+        self.loss_OCR_real = losses[finite].mean()
+        self.loss_OCR_real.backward()
+        for parameter in self.netOCR.parameters():
+            if parameter.grad is not None:
+                torch.nan_to_num_(parameter.grad, nan=0.0, posinf=0.0, neginf=0.0)
+        self.optimizer_OCR.step()
+        self.optimizer_OCR.zero_grad()
+
+        zero = self.loss_OCR_real.detach().new_zeros(())
+        self.loss_G = zero
+        self.loss_D = zero
+        self.loss_Dfake = zero
+        self.loss_Dreal = zero
+        self.loss_OCR_fake_raw = zero
+        self.alpha_ocr = zero
+        self.loss_OCR_fake = zero
+        self.loss_w_fake_raw = zero
+        self.alpha_w = zero
+        self.loss_w_fake = zero
+        self.loss_w_real = zero
+        self.Lcycle = zero
+        return self.loss_OCR_real
+
     def optimize_D_OCR_WL(self):
         self.forward()
         self.set_requires_grad([self.netD], True)

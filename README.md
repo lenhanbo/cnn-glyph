@@ -160,7 +160,8 @@ Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-e
 `--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`,
 `--feat-model-path`, `--no-pretrained-style-encoder`, `--no-writer-loss`,
 `--writer-loss`, `--writer-loss-weight`, `--ocr-checkpoint`, `--freeze-ocr`,
-`--finetune-ocr`, `--g-steps-per-d-step`, and `--no-glyph-cnn`.
+`--finetune-ocr`, `--g-steps-per-d-step`, `--ocr-warmup-epochs`, and
+`--no-glyph-cnn`.
 Command-line values take priority over `configs/kaggle.yaml`.
 
 To ablate only the LiteGlyphCNN while keeping all current training settings:
@@ -174,6 +175,20 @@ bash scripts/kaggle_run.sh stage1 --no-glyph-cnn --no-writer-loss \
 `--no-glyph-cnn` changes only the query backend to VATr's original
 `16x16 glyph -> flatten -> Linear(256,512)` path. Reference count, losses,
 learning rates, dataset grouping and optimizer cadence remain unchanged.
+
+To train OCR on real IAM words before enabling GAN optimization:
+
+```bash
+bash scripts/kaggle_run.sh stage1 --no-glyph-cnn --no-writer-loss \
+  --ocr-warmup-epochs 10 --g-steps-per-d-step 1 --no-amp \
+  --epochs 110 --output-dir /kaggle/working/vatr-ocr-warmup
+```
+
+Warm-up occupies the first N total epochs (`--epochs 110` means 10 OCR-only
+plus 100 GAN epochs). It always runs in FP32, updates only `netOCR` from real
+images, writes `phase=ocr_warmup` metrics, and saves
+`ocr_warmup_complete.pth` at the transition. It cannot be combined with a
+globally frozen OCR.
 
 For a clean writer-loss ablation, use a fresh output directory:
 

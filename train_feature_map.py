@@ -39,6 +39,10 @@ def select_query_mode(mode: str, no_glyph_cnn: bool) -> str:
     return "reference_baseline" if no_glyph_cnn else mode
 
 
+def training_phase(epoch: int, ocr_warmup_epochs: int) -> str:
+    return "ocr_warmup" if epoch < ocr_warmup_epochs else "gan"
+
+
 def optimization_plan(no_writer_loss: bool, batch_index: int, cfg: dict) -> tuple[str, ...]:
     """Return the optimizer phases for one batch.
 
@@ -107,7 +111,7 @@ def _crop_word_tensor(image: torch.Tensor, fallback_width: int) -> torch.Tensor:
 class MetricsLogger:
     """Append one durable CSV row per selected batch; safe across resume."""
     fields = (
-        "timestamp", "epoch", "batch", "batches", "global_step", "query_mode", "batch_seconds",
+        "timestamp", "epoch", "batch", "batches", "global_step", "phase", "query_mode", "batch_seconds",
         "samples_per_second", "lr_g", "lr_d", "lr_ocr", "lr_writer", "gpu_memory_mb",
         "gpu_memory_peak_mb", *LOSS_NAMES,
     )
@@ -404,6 +408,7 @@ class Args:
             tn_dim_feedforward=512, tn_enc_layers=3, tn_dec_layers=3, g_lr=5e-5, d_lr=5e-5,
             w_lr=5e-5, ocr_lr=5e-5, no_writer_loss=False, writer_loss_weight=1.0,
             no_ocr_loss=False, freeze_ocr=False, g_steps_per_d_step=2,
+            ocr_warmup_epochs=0,
             is_seq=True, num_words=3, is_cycle=False, is_kld=False,
             add_noise=False, all_chars=False,
             query_input="unifont", query_linear=True, glyph_chunk_size=128,
@@ -548,6 +553,8 @@ def main() -> None:
                         help="Scale the dynamically balanced writer objective; default 1.0")
     parser.add_argument("--g-steps-per-d-step", type=int,
                         help="Generator updates after each discriminator update in writer-free mode")
+    parser.add_argument("--ocr-warmup-epochs", type=int,
+                        help="First N total epochs update only OCR on real IAM words")
     parser.add_argument("--ocr-checkpoint",
                         help="Compatible standalone OCR or full VATr checkpoint")
     ocr_group = parser.add_mutually_exclusive_group()
@@ -592,6 +599,7 @@ def main() -> None:
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "token_preview_layers", "token_preview_samples", "token_preview_max_chars",
         "glyph_chunk_size", "device", "raw_group_by", "writer_loss_weight", "g_steps_per_d_step",
+        "ocr_warmup_epochs",
         "forms_path", "feat_model_path", "ocr_checkpoint",
     )
     for name in override_names:
@@ -638,6 +646,18 @@ def main() -> None:
     mode = cfg.get("mode", "auto")
     resume_path = output / "latest.pth" if cli.resume == "auto" else (Path(cli.resume) if cli.resume else None)
     resume_header = load_checkpoint_file(resume_path, map_location="cpu") if resume_path and resume_path.exists() else None
+    warmup_epochs = int(cfg.get("ocr_warmup_epochs", 0))
+    if warmup_epochs < 0:
+        raise ValueError("ocr_warmup_epochs must be non-negative")
+    if warmup_epochs and cfg.get("freeze_ocr", False):
+        raise ValueError("OCR warm-up cannot be combined with freeze_ocr")
+    if resume_header is not None:
+        saved_warmup = int(resume_header.get("config", {}).get("ocr_warmup_epochs", 0))
+        if saved_warmup != warmup_epochs:
+            raise ValueError(
+                f"Resume checkpoint used ocr_warmup_epochs={saved_warmup}, "
+                f"but this run requests {warmup_epochs}"
+            )
     checkpoint_mode = resume_header.get("query_mode") if resume_header else None
     initial_mode = checkpoint_mode if checkpoint_mode in {"reference_baseline", "stage1", "stage2"} else mode
     if mode == "stage2" and resume_header is None:
@@ -650,6 +670,7 @@ def main() -> None:
         f"glyph_query={'vatr-linear' if initial_mode == 'reference_baseline' else initial_mode}",
         flush=True,
     )
+    print(f"ocr_warmup_epochs={warmup_epochs} (included in total epochs)", flush=True)
     print(
         f"writer_loss={'disabled' if args.no_writer_loss else 'enabled'} "
         f"weight={args.writer_loss_weight} "
@@ -720,21 +741,30 @@ def main() -> None:
         fixed_val = next(iter(val_loader))
         restore_rng_state(rng_state)
     for epoch in range(start_epoch, epochs):
-        if mode == "auto" and epoch == switch_epoch and get_query_mode(model) == "stage1":
+        phase_name = training_phase(epoch, warmup_epochs)
+        gan_epoch = epoch - warmup_epochs
+        if mode == "auto" and gan_epoch == switch_epoch and get_query_mode(model) == "stage1":
             switch_stage(model, output, epoch, global_step, scaler, scheduler, cfg)
         for batch_index, data in enumerate(train_loader):
             batch_started = time.perf_counter()
-            with amp_context():
-                for phase in optimization_plan(model.args.no_writer_loss, batch_index, cfg):
+            if phase_name == "ocr_warmup":
+                # Direct FP32 backward is intentional: the runner's legacy
+                # optimizer methods do not use GradScaler.
+                with contextlib.nullcontext():
                     model._set_input(data)
-                    if phase == "d_ocr":
-                        model.optimize_D_OCR(); model.optimize_D_OCR_step()
-                    elif phase == "g_ocr":
-                        model.optimize_G_only(); model.optimize_G_step()
-                    elif phase == "g_writer":
-                        model.optimize_G_WL(); model.optimize_G_step()
-                    elif phase == "d_writer":
-                        model.optimize_D_WL(); model.optimize_D_WL_step()
+                    model.optimize_OCR_real_only()
+            else:
+                with amp_context():
+                    for phase in optimization_plan(model.args.no_writer_loss, batch_index, cfg):
+                        model._set_input(data)
+                        if phase == "d_ocr":
+                            model.optimize_D_OCR(); model.optimize_D_OCR_step()
+                        elif phase == "g_ocr":
+                            model.optimize_G_only(); model.optimize_G_step()
+                        elif phase == "g_writer":
+                            model.optimize_G_WL(); model.optimize_G_step()
+                        elif phase == "d_writer":
+                            model.optimize_D_WL(); model.optimize_D_WL_step()
             if get_query_mode(model) == "stage2":
                 model.netG.query_embed.enforce_padding_zero()
             global_step += 1
@@ -747,7 +777,8 @@ def main() -> None:
                 row = {
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "epoch": epoch + 1,
                     "batch": batch_index + 1, "batches": len(train_loader), "global_step": global_step,
-                    "query_mode": get_query_mode(model), "batch_seconds": f"{elapsed:.6f}",
+                    "phase": phase_name, "query_mode": get_query_mode(model),
+                    "batch_seconds": f"{elapsed:.6f}",
                     "samples_per_second": f"{len(data['label']) / max(elapsed, 1e-9):.3f}",
                     "lr_g": model.optimizer_G.param_groups[0]["lr"],
                     "lr_d": model.optimizer_D.param_groups[0]["lr"],
@@ -758,28 +789,36 @@ def main() -> None:
                 }
                 metrics.write(row)
                 loss_text = " ".join(f"{name}={value:.4g}" for name, value in losses.items())
-                print(f"epoch={epoch + 1}/{epochs} batch={batch_index + 1}/{len(train_loader)} "
+                print(f"epoch={epoch + 1}/{epochs} phase={phase_name} "
+                      f"batch={batch_index + 1}/{len(train_loader)} "
                       f"step={global_step} query={get_query_mode(model)} {loss_text} "
                       f"sec={elapsed:.2f} gpu={gpu_memory:.0f}MB", flush=True)
             if cfg.get("max_batches_per_epoch") and batch_index + 1 >= int(cfg["max_batches_per_epoch"]):
                 break
-        scheduler.step()
+        if phase_name == "gan":
+            scheduler.step()
         next_epoch = epoch + 1
         if fixed_val is not None and next_epoch % preview_every == 0:
             preview_path = output / "previews" / f"epoch_{next_epoch:04d}.png"
             save_preview(model, fixed_val, preview_path, cfg["device"], int(cfg.get("preview_samples", 4)))
             print(f"preview={preview_path}", flush=True)
-            token_preview_path = output / "previews" / f"tokens_epoch_{next_epoch:04d}.png"
-            save_token_preview(
-                model, fixed_val, token_preview_path, cfg["device"],
-                max_samples=int(cfg.get("token_preview_samples", 2)),
-                last_layers=int(cfg.get("token_preview_layers", 3)),
-                max_chars=int(cfg.get("token_preview_max_chars", 16)),
-            )
-            print(f"token_preview={token_preview_path}", flush=True)
+            if phase_name == "gan":
+                token_preview_path = output / "previews" / f"tokens_epoch_{next_epoch:04d}.png"
+                save_token_preview(
+                    model, fixed_val, token_preview_path, cfg["device"],
+                    max_samples=int(cfg.get("token_preview_samples", 2)),
+                    last_layers=int(cfg.get("token_preview_layers", 3)),
+                    max_chars=int(cfg.get("token_preview_max_chars", 16)),
+                )
+                print(f"token_preview={token_preview_path}", flush=True)
+        if warmup_epochs and next_epoch == warmup_epochs:
+            warmup_path = output / "ocr_warmup_complete.pth"
+            save(warmup_path, model, next_epoch, global_step, scaler, scheduler, cfg)
+            print(f"ocr_warmup_complete={warmup_path}", flush=True)
         if next_epoch % int(cfg.get("save_every", 5)) == 0 or next_epoch == epochs:
             save(output / "latest.pth", model, next_epoch, global_step, scaler, scheduler, cfg)
-        print(f"epoch_complete={next_epoch}/{epochs} step={global_step} query={get_query_mode(model)}", flush=True)
+        print(f"epoch_complete={next_epoch}/{epochs} phase={phase_name} "
+              f"step={global_step} query={get_query_mode(model)}", flush=True)
 
 
 if __name__ == "__main__":

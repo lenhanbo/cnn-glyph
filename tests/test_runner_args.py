@@ -1,4 +1,4 @@
-from train_feature_map import Args, optimization_plan, select_query_mode
+from train_feature_map import Args, optimization_plan, select_query_mode, training_phase
 
 
 def test_runner_provides_all_legacy_vatr_runtime_arguments():
@@ -7,7 +7,7 @@ def test_runner_provides_all_legacy_vatr_runtime_arguments():
         "add_noise", "all_chars", "alphabet", "batch_size", "d_lr", "device",
         "english_words_path", "g_lr", "img_height", "is_cycle", "is_kld", "is_seq",
         "no_ocr_loss", "no_writer_loss", "num_examples", "num_words", "num_writers",
-        "ocr_lr", "freeze_ocr", "query_input", "query_linear", "resolution", "special_alphabet",
+        "ocr_lr", "freeze_ocr", "ocr_warmup_epochs", "query_input", "query_linear", "resolution", "special_alphabet",
         "tn_dec_layers", "tn_dim_feedforward", "tn_dropout", "tn_enc_layers",
         "tn_hidden_dim", "tn_nheads", "vocab_size", "w_lr", "writer_loss_weight",
         "g_steps_per_d_step",
@@ -41,3 +41,10 @@ def test_no_glyph_cnn_changes_only_query_mode():
     assert select_query_mode("stage1", True) == "reference_baseline"
     assert select_query_mode("auto", True) == "reference_baseline"
     assert select_query_mode("stage1", False) == "stage1"
+
+
+def test_ocr_warmup_phase_occupies_first_configured_total_epochs():
+    assert training_phase(0, 2) == "ocr_warmup"
+    assert training_phase(1, 2) == "ocr_warmup"
+    assert training_phase(2, 2) == "gan"
+    assert training_phase(0, 0) == "gan"
