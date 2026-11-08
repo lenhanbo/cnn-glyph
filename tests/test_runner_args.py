@@ -1,4 +1,4 @@
-from train_feature_map import Args, optimization_plan
+from train_feature_map import Args, apply_vatr_original_preset, optimization_plan
 
 
 def test_runner_provides_all_legacy_vatr_runtime_arguments():
@@ -35,3 +35,20 @@ def test_writer_free_schedule_is_one_discriminator_then_configured_generator_ste
 def test_writer_enabled_schedule_preserves_original_cadence():
     assert optimization_plan(False, 0, {}) == ("g_ocr", "d_ocr", "g_writer", "d_writer")
     assert optimization_plan(False, 1, {}) == ("d_ocr", "d_writer")
+
+
+def test_vatr_original_preset_restores_official_training_defaults():
+    original = {"mode": "stage1", "num_examples": 1, "amp": True, "d_lr": 2.5e-5,
+                "no_writer_loss": True}
+    cfg = apply_vatr_original_preset(original)
+
+    assert original["mode"] == "stage1"
+    assert cfg["training_preset"] == "vatr-original"
+    assert cfg["mode"] == "reference_baseline"
+    assert cfg["num_examples"] == 15
+    assert cfg["amp"] is False
+    assert cfg["g_lr"] == cfg["d_lr"] == cfg["w_lr"] == cfg["ocr_lr"] == 5e-5
+    assert cfg["no_writer_loss"] is False
+    assert cfg["freeze_ocr"] is False
+    assert cfg["num_critic_gocr_train"] == 2
+    assert cfg["num_critic_docr_train"] == 1

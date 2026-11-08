@@ -163,6 +163,21 @@ Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-e
 and `--finetune-ocr`.
 Command-line values take priority over `configs/kaggle.yaml`.
 
+To run the official VATr control configuration with one flag:
+
+```bash
+bash scripts/kaggle_run.sh reference_baseline --vatr-original \
+  --dataset-path /kaggle/input/my-iam/IAM-32.pickle \
+  --output-dir /kaggle/working/vatr-original-control
+```
+
+`--vatr-original` selects the original flattened-Unifont query, 15 style
+references, writer and OCR losses, original optimizer cadence and learning
+rates, pretrained ResNet-18 style encoder, and FP32 training. Explicit CLI
+values such as `--epochs` still override the preset. When a raw IAM directory
+is used instead of `IAM-32.pickle`, pass official `forms.txt` through
+`--forms-path`; form IDs are not valid writer-loss classes.
+
 For a clean writer-loss ablation, use a fresh output directory:
 
 ```bash
