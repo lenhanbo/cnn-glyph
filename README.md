@@ -160,23 +160,20 @@ Other runtime flags include `--seed`, `--num-examples`, `--num-words`, `--save-e
 `--glyph-chunk-size`, `--no-amp`, `--raw-group-by`, `--forms-path`,
 `--feat-model-path`, `--no-pretrained-style-encoder`, `--no-writer-loss`,
 `--writer-loss`, `--writer-loss-weight`, `--ocr-checkpoint`, `--freeze-ocr`,
-and `--finetune-ocr`.
+`--finetune-ocr`, `--g-steps-per-d-step`, and `--no-glyph-cnn`.
 Command-line values take priority over `configs/kaggle.yaml`.
 
-To run the official VATr control configuration with one flag:
+To ablate only the LiteGlyphCNN while keeping all current training settings:
 
 ```bash
-bash scripts/kaggle_run.sh reference_baseline --vatr-original \
-  --dataset-path /kaggle/input/my-iam/IAM-32.pickle \
-  --output-dir /kaggle/working/vatr-original-control
+bash scripts/kaggle_run.sh stage1 --no-glyph-cnn --no-writer-loss \
+  --g-steps-per-d-step 2 --no-amp \
+  --output-dir /kaggle/working/vatr-linear-query-control
 ```
 
-`--vatr-original` selects the original flattened-Unifont query, 15 style
-references, writer and OCR losses, original optimizer cadence and learning
-rates, pretrained ResNet-18 style encoder, and FP32 training. Explicit CLI
-values such as `--epochs` still override the preset. When a raw IAM directory
-is used instead of `IAM-32.pickle`, pass official `forms.txt` through
-`--forms-path`; form IDs are not valid writer-loss classes.
+`--no-glyph-cnn` changes only the query backend to VATr's original
+`16x16 glyph -> flatten -> Linear(256,512)` path. Reference count, losses,
+learning rates, dataset grouping and optimizer cadence remain unchanged.
 
 For a clean writer-loss ablation, use a fresh output directory:
 

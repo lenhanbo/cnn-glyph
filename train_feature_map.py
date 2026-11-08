@@ -31,68 +31,9 @@ LOSS_NAMES = (
 )
 
 
-VATR_ORIGINAL_PRESET = {
-    "training_preset": "vatr-original",
-    "mode": "reference_baseline",
-    "epochs": 100_000,
-    "batch_size": 8,
-    "num_examples": 15,
-    "num_words": 3,
-    "num_workers": 0,
-    "seed": 742,
-    "amp": False,
-    "img_height": 32,
-    "resolution": 16,
-    "tn_hidden_dim": 512,
-    "tn_dropout": 0.1,
-    "tn_nheads": 8,
-    "tn_dim_feedforward": 512,
-    "tn_enc_layers": 3,
-    "tn_dec_layers": 3,
-    "g_lr": 5e-5,
-    "d_lr": 5e-5,
-    "w_lr": 5e-5,
-    "ocr_lr": 5e-5,
-    "no_writer_loss": False,
-    "writer_loss_weight": 1.0,
-    "ocr_checkpoint": None,
-    "freeze_ocr": False,
-    "use_pretrained_style_encoder": True,
-    "raw_group_by": "writer",
-    "query_input": "unifont",
-    "query_linear": True,
-    "is_seq": True,
-    "is_cycle": False,
-    "is_kld": False,
-    "add_noise": False,
-    "all_chars": False,
-    "num_critic_gocr_train": 2,
-    "num_critic_docr_train": 1,
-    "num_critic_gwl_train": 2,
-    "num_critic_dwl_train": 1,
-}
-
-
-def apply_vatr_original_preset(config: dict) -> dict:
-    """Return official VATr defaults while allowing later CLI overrides."""
-    result = dict(config)
-    result.update(VATR_ORIGINAL_PRESET)
-    return result
-
-
-def validate_vatr_original_dataset(config: dict) -> None:
-    """Writer supervision needs true IAM writer IDs when loading raw files."""
-    if config.get("training_preset") != "vatr-original":
-        return
-    dataset_path = Path(config["dataset_path"])
-    if dataset_path.is_dir():
-        if config.get("raw_group_by") != "writer":
-            raise ValueError("--vatr-original requires raw_group_by=writer for a raw IAM directory")
-        if not config.get("forms_path"):
-            raise ValueError(
-                "--vatr-original with a raw IAM directory requires --forms-path /path/to/forms.txt. "
-                "Alternatively use IAM-32.pickle, which already contains writer groups."
-            )
+def select_query_mode(mode: str, no_glyph_cnn: bool) -> str:
+    """Select only the query backend without changing any training hyperparameters."""
+    return "reference_baseline" if no_glyph_cnn else mode
 
 
 def optimization_plan(no_writer_loss: bool, batch_index: int, cfg: dict) -> tuple[str, ...]:
@@ -579,8 +520,8 @@ def switch_stage(model: VATr, output: Path, epoch: int, global_step: int, scaler
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/kaggle.yaml")
-    parser.add_argument("--vatr-original", action="store_true",
-                        help="Apply official VATr architecture, losses, schedule and FP32 defaults")
+    parser.add_argument("--no-glyph-cnn", action="store_true",
+                        help="Use VATr's flattened-Unifont linear query instead of LiteGlyphCNN")
     parser.add_argument("--mode", choices=["reference_baseline", "auto", "stage1", "stage2"])
     parser.add_argument("--resume", nargs="?", const="auto")
     parser.add_argument("--stage1-checkpoint")
@@ -642,8 +583,7 @@ def main() -> None:
     cfg = yaml.safe_load(Path(cli.config).read_text(encoding="utf-8"))
     if cli.mode:
         cfg["mode"] = cli.mode
-    if cli.vatr_original:
-        cfg = apply_vatr_original_preset(cfg)
+    cfg["mode"] = select_query_mode(cfg.get("mode", "auto"), cli.no_glyph_cnn)
     override_names = (
         "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
@@ -683,7 +623,6 @@ def main() -> None:
     if cli.preview_only:
         cfg["use_pretrained_style_encoder"] = False
     cfg = resolve_paths(cfg)
-    validate_vatr_original_dataset(cfg)
     cfg["device"] = cfg.get("device", "cuda")
     preflight(cfg)
     if cli.preflight_only:
@@ -703,8 +642,10 @@ def main() -> None:
     if initial_mode == "auto":
         initial_mode = "stage1"
     args = Args(cfg, train_set.num_writers, initial_mode)
-    if cfg.get("training_preset"):
-        print(f"training_preset={cfg['training_preset']}", flush=True)
+    print(
+        f"glyph_query={'vatr-linear' if initial_mode == 'reference_baseline' else initial_mode}",
+        flush=True,
+    )
     print(
         f"writer_loss={'disabled' if args.no_writer_loss else 'enabled'} "
         f"weight={args.writer_loss_weight} "
