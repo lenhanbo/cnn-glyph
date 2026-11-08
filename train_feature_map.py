@@ -38,7 +38,8 @@ def optimization_plan(no_writer_loss: bool, batch_index: int, cfg: dict) -> tupl
     path preserves the original VATr cadence.
     """
     if no_writer_loss:
-        return ("d_ocr", "g_ocr")
+        g_steps = max(1, int(cfg.get("g_steps_per_d_step", 2)))
+        return ("d_ocr",) + ("g_ocr",) * g_steps
     phases = []
     if batch_index % int(cfg.get("num_critic_gocr_train", 2)) == 0:
         phases.append("g_ocr")
@@ -55,6 +56,44 @@ def scalar(value) -> float:
     if torch.is_tensor(value):
         return float(value.detach().float().mean().cpu())
     return float(value)
+
+
+def greedy_ctc_decode(logits: torch.Tensor, alphabet: str) -> list[str]:
+    """Collapse a [time,batch,class] CTC argmax path into readable strings."""
+    paths = logits.detach().float().argmax(dim=2).transpose(0, 1).cpu().tolist()
+    decoded = []
+    for path in paths:
+        chars = []
+        previous = None
+        for index in path:
+            if index != previous and index != 0:
+                chars.append(alphabet[index - 1] if index <= len(alphabet) else "?")
+            previous = index
+        decoded.append("".join(chars))
+    return decoded
+
+
+def character_error_rate(prediction: str, target: str) -> float:
+    """Levenshtein distance normalized by target length."""
+    previous = list(range(len(target) + 1))
+    for row, predicted_char in enumerate(prediction, 1):
+        current = [row]
+        for column, target_char in enumerate(target, 1):
+            current.append(min(
+                current[-1] + 1,
+                previous[column] + 1,
+                previous[column - 1] + (predicted_char != target_char),
+            ))
+        previous = current
+    return previous[-1] / max(1, len(target))
+
+
+def _crop_word_tensor(image: torch.Tensor, fallback_width: int) -> torch.Tensor:
+    """Remove right-hand white batch padding before OCR preview inference."""
+    ink_columns = (image < 0.95).any(dim=0).any(dim=0).nonzero(as_tuple=False).flatten()
+    width = int(ink_columns[-1]) + 2 if ink_columns.numel() else int(fallback_width)
+    width = max(2, min(width, image.shape[-1]))
+    return image[..., :width]
 
 
 class MetricsLogger:
@@ -133,6 +172,7 @@ def save_token_preview(model: VATr, data: dict, path: str | Path, device: str,
         query_tokens = diagnostic["query_tokens"]
         decoder_tokens = diagnostic["decoder_tokens"]
         layer_images = diagnostic["layer_images"]
+        independent_layer_images = diagnostic["independent_layer_images"]
         layer_numbers = diagnostic["layer_numbers"]
         glyphs = diagnostic["glyphs"]
         resolution = int(model.args.resolution)
@@ -176,6 +216,14 @@ def save_token_preview(model: VATr, data: dict, path: str | Path, device: str,
                     patch = rendered[:, char_index * resolution:(char_index + 1) * resolution]
                     rendered_cells.append(_gray_image(patch).resize((cell, cell), Image.Resampling.BILINEAR))
                 rows.append((f"L{layer_number} render", rendered_cells))
+                independent_cells = []
+                independent = independent_layer_images[layer_offset, sample_index, 0]
+                for char_index in range(length):
+                    patch = independent[:, char_index * resolution:(char_index + 1) * resolution]
+                    independent_cells.append(
+                        _gray_image(patch).resize((cell, cell), Image.Resampling.BILINEAR)
+                    )
+                rows.append((f"L{layer_number} independent", independent_cells))
 
             header_height = 42
             canvas = Image.new("L", (label_width + length * cell, header_height + len(rows) * row_height), 255)
@@ -227,7 +275,18 @@ def save_preview(model: VATr, data: dict, path: str | Path, device: str, max_sam
     encoded = encoded.to(device).unsqueeze(1)
     try:
         with torch.no_grad():
-            generated = model.netG.Eval(styles, encoded, positions)[0].detach().float().cpu()
+            generated_device = model.netG.Eval(styles, encoded, positions)[0].detach().float()
+            generated = generated_device.cpu()
+
+            ocr_real = []
+            ocr_fake = []
+            alphabet = model.args.alphabet
+            for index in range(count):
+                fallback_width = int(lengths[index]) * int(model.args.resolution)
+                real_word = _crop_word_tensor(data["img"][index], fallback_width).unsqueeze(0).to(device)
+                fake_word = generated_device[index:index + 1, :, :, :fallback_width]
+                ocr_real.append(greedy_ctc_decode(model.netOCR(real_word), alphabet)[0])
+                ocr_fake.append(greedy_ctc_decode(model.netOCR(fake_word), alphabet)[0])
 
         panels = []
         for index in range(count):
@@ -244,19 +303,32 @@ def save_preview(model: VATr, data: dict, path: str | Path, device: str, max_sam
             fake_width = int(lengths[index]) * int(model.args.resolution)
             fake = _gray_image(generated[index, 0, :, :fake_width])
             label = labels[index].decode("utf-8") if isinstance(labels[index], bytes) else str(labels[index])
-            panels.append((label, style_strip, real, fake))
+            panels.append((label, style_strip, real, fake, ocr_real[index], ocr_fake[index]))
 
-        canvas_width = max(max(image.width for image in panel[1:]) for panel in panels) + 90
-        panel_height = 18 + 3 * 36 + 8
+        canvas_width = max(520, max(max(image.width for image in panel[1:4]) for panel in panels) + 90)
+        panel_height = 18 + 3 * 36 + 2 * 18 + 8
         canvas = Image.new("L", (canvas_width, panel_height * len(panels)), 255)
         draw = ImageDraw.Draw(canvas)
-        for index, (label, style, real, fake) in enumerate(panels):
+        for index, (label, style, real, fake, real_text, fake_text) in enumerate(panels):
             top = index * panel_height
             draw.text((4, top + 2), f"target: {label}", fill=0)
             for row, (name, image) in enumerate((("style", style), ("real", real), ("fake", fake))):
                 y = top + 18 + row * 36
                 draw.text((4, y + 9), name, fill=0)
                 canvas.paste(image, (70, y))
+            text_top = top + 18 + 3 * 36
+            real_display = real_text if real_text else "<blank>"
+            fake_display = fake_text if fake_text else "<blank>"
+            draw.text(
+                (4, text_top + 2),
+                f"OCR real: {real_display} | CER={character_error_rate(real_text, label):.2f}",
+                fill=0,
+            )
+            draw.text(
+                (4, text_top + 20),
+                f"OCR fake: {fake_display} | CER={character_error_rate(fake_text, label):.2f}",
+                fill=0,
+            )
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         canvas.save(path)
@@ -323,7 +395,8 @@ class Args:
             batch_size=8, num_examples=1, tn_hidden_dim=512, tn_dropout=0.1, tn_nheads=8,
             tn_dim_feedforward=512, tn_enc_layers=3, tn_dec_layers=3, g_lr=5e-5, d_lr=5e-5,
             w_lr=5e-5, ocr_lr=5e-5, no_writer_loss=False, writer_loss_weight=1.0,
-            no_ocr_loss=False, freeze_ocr=False, is_seq=True, num_words=3, is_cycle=False, is_kld=False,
+            no_ocr_loss=False, freeze_ocr=False, g_steps_per_d_step=2,
+            is_seq=True, num_words=3, is_cycle=False, is_kld=False,
             add_noise=False, all_chars=False,
             query_input="unifont", query_linear=True, glyph_chunk_size=128,
         )
@@ -457,12 +530,14 @@ def main() -> None:
     parser.add_argument("--lr", type=float, help="Set G, D, OCR and writer learning rates together")
     writer_group = parser.add_mutually_exclusive_group()
     writer_group.add_argument("--no-writer-loss", dest="no_writer_loss", action="store_true",
-                              help="Disable writer CE on real and fake while preserving GAN update cadence")
+                              help="Disable writer CE and use the configurable writer-free G:D schedule")
     writer_group.add_argument("--writer-loss", dest="no_writer_loss", action="store_false",
                               help="Enable writer CE (overrides the YAML setting)")
     parser.set_defaults(no_writer_loss=None)
     parser.add_argument("--writer-loss-weight", type=float,
                         help="Scale the dynamically balanced writer objective; default 1.0")
+    parser.add_argument("--g-steps-per-d-step", type=int,
+                        help="Generator updates after each discriminator update in writer-free mode")
     parser.add_argument("--ocr-checkpoint",
                         help="Compatible standalone OCR or full VATr checkpoint")
     ocr_group = parser.add_mutually_exclusive_group()
@@ -505,7 +580,7 @@ def main() -> None:
         "dataset_path", "output_dir", "batch_size", "epochs", "switch_epoch", "num_examples", "num_words",
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "token_preview_layers", "token_preview_samples", "token_preview_max_chars",
-        "glyph_chunk_size", "device", "raw_group_by", "writer_loss_weight",
+        "glyph_chunk_size", "device", "raw_group_by", "writer_loss_weight", "g_steps_per_d_step",
         "forms_path", "feat_model_path", "ocr_checkpoint",
     )
     for name in override_names:
@@ -562,7 +637,10 @@ def main() -> None:
     print(
         f"writer_loss={'disabled' if args.no_writer_loss else 'enabled'} "
         f"weight={args.writer_loss_weight} "
-        f"ocr={'frozen' if args.freeze_ocr else 'trainable'}",
+        f"ocr={'frozen' if args.freeze_ocr else 'trainable'} "
+        f"G:D={args.g_steps_per_d_step}:1" if args.no_writer_loss else
+        f"writer_loss=enabled weight={args.writer_loss_weight} "
+        f"ocr={'frozen' if args.freeze_ocr else 'trainable'} schedule=VATr",
         flush=True,
     )
     if args.freeze_ocr and not cfg.get("ocr_checkpoint") and resume_header is None and mode != "stage2":

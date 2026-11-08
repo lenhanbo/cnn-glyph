@@ -171,8 +171,9 @@ bash scripts/kaggle_run.sh stage1 --epochs 100 --no-writer-loss \
 ```
 
 With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remain zero.
-Every batch runs exactly one `D + OCR_real` update followed by one
-`G_adv + alpha_ocr * OCR_fake_raw` update; the writer-free G:D ratio is therefore 1:1.
+By default every batch runs one `D + OCR_real` update followed by two
+`G_adv + alpha_ocr * OCR_fake_raw` updates, giving a writer-free G:D ratio of 2:1.
+Use `--g-steps-per-d-step N` to change this ratio.
 
 In feature-query modes, character identity is protected by two residual paths:
 the mean-pooled Lite CNN embedding is fused with a bias-free projection of the
@@ -181,6 +182,11 @@ style fusion. Sinusoidal word-position encodings are included in attention.
 At the stage-1 to stage-2 transition, the raw-glyph residual is materialized as
 a `[130, 512]` table together with the CNN feature maps, so GNU/CNN dependencies
 can still be removed without changing the query output.
+Token previews include both `Lx render` (all character tokens rendered jointly)
+and `Lx independent` (the same FCN applied to one character at a time). Their
+difference diagnoses cross-token competition in the word-level FCN renderer.
+Main validation previews also show greedy CTC predictions and character error
+rates for both real and generated words.
 
 To use the CRNN contained in the official full VATr checkpoint as a fixed OCR
 teacher, download `vatr.pth` from the official VATr GitHub release and start a

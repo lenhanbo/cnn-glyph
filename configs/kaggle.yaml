@@ -24,6 +24,7 @@ ocr_checkpoint: null
 freeze_ocr: false
 no_writer_loss: false
 writer_loss_weight: 1.0
+g_steps_per_d_step: 2
 glyph_chunk_size: 128
 save_every: 5
 log_every: 1

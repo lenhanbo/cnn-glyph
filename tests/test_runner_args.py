@@ -10,6 +10,7 @@ def test_runner_provides_all_legacy_vatr_runtime_arguments():
         "ocr_lr", "freeze_ocr", "query_input", "query_linear", "resolution", "special_alphabet",
         "tn_dec_layers", "tn_dim_feedforward", "tn_dropout", "tn_enc_layers",
         "tn_hidden_dim", "tn_nheads", "vocab_size", "w_lr", "writer_loss_weight",
+        "g_steps_per_d_step",
     }
     assert not sorted(name for name in required if not hasattr(args, name))
     assert args.num_examples == 1
@@ -23,10 +24,12 @@ def test_runner_accepts_writer_loss_ablation_settings():
     assert args.writer_loss_weight == 0.25
 
 
-def test_writer_free_schedule_is_one_discriminator_then_one_generator_every_batch():
-    assert optimization_plan(True, 0, {}) == ("d_ocr", "g_ocr")
-    assert optimization_plan(True, 1, {}) == ("d_ocr", "g_ocr")
-    assert optimization_plan(True, 27, {}) == ("d_ocr", "g_ocr")
+def test_writer_free_schedule_is_one_discriminator_then_configured_generator_steps():
+    assert optimization_plan(True, 0, {}) == ("d_ocr", "g_ocr", "g_ocr")
+    assert optimization_plan(True, 1, {}) == ("d_ocr", "g_ocr", "g_ocr")
+    assert optimization_plan(True, 27, {"g_steps_per_d_step": 3}) == (
+        "d_ocr", "g_ocr", "g_ocr", "g_ocr"
+    )
 
 
 def test_writer_enabled_schedule_preserves_original_cadence():

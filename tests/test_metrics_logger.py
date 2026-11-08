@@ -5,7 +5,10 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 
-from train_feature_map import MetricsLogger, download_hf_checkpoint, save_preview, save_token_preview
+from train_feature_map import (
+    MetricsLogger, character_error_rate, download_hf_checkpoint, greedy_ctc_decode,
+    save_preview, save_token_preview,
+)
 
 
 def test_metrics_csv_appends_once_and_preserves_header(tmp_path):
@@ -41,9 +44,18 @@ class _Generator(nn.Module):
             "query_tokens": torch.arange(512, device=styles.device).float().repeat(batch, characters, 1),
             "decoder_tokens": torch.randn(layers, batch, characters, 512, device=styles.device),
             "layer_images": torch.zeros(layers, batch, 1, 32, characters * 16, device=styles.device),
+            "independent_layer_images": torch.zeros(
+                layers, batch, 1, 32, characters * 16, device=styles.device
+            ),
             "layer_numbers": list(range(1, layers + 1)),
             "glyphs": torch.zeros(batch, characters, 1, 32, 32, device=styles.device),
         }
+
+
+class _OCR(nn.Module):
+    def forward(self, images):
+        # A stable all-blank CTC path is sufficient for exercising preview text.
+        return torch.zeros(4, images.shape[0], 4, device=images.device)
 
 
 class _PreviewModel(nn.Module):
@@ -51,7 +63,8 @@ class _PreviewModel(nn.Module):
         super().__init__()
         self.netconverter = _Converter()
         self.netG = _Generator()
-        self.args = SimpleNamespace(resolution=16)
+        self.netOCR = _OCR()
+        self.args = SimpleNamespace(resolution=16, alphabet="abc")
 
 
 def test_preview_writes_style_real_and_fake_panel(tmp_path):
@@ -76,6 +89,15 @@ def test_token_preview_writes_per_character_layer_table(tmp_path):
     path = tmp_path / "tokens.png"
     save_token_preview(_PreviewModel(), data, path, "cpu", max_samples=2, last_layers=2)
     assert path.is_file()
+
+
+def test_ctc_decode_and_character_error_rate():
+    path = torch.tensor([0, 1, 1, 0, 2, 2, 3])
+    logits = torch.full((len(path), 1, 4), -10.0)
+    logits[torch.arange(len(path)), 0, path] = 10.0
+    assert greedy_ctc_decode(logits, "abc") == ["abc"]
+    assert character_error_rate("abc", "abc") == 0
+    assert character_error_rate("ac", "abc") == 1 / 3
 
 
 def test_hf_checkpoint_download_uses_dataset_repo_and_local_dir(tmp_path, monkeypatch):

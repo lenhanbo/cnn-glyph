@@ -352,6 +352,14 @@ class Generator(nn.Module):
         h = h.permute(0, 3, 2, 1)
         return self.DEC(h)
 
+    def _render_character_tokens_independently(self, tokens):
+        """Render each character in isolation, then concatenate tiles by word."""
+        batch, characters, hidden = tokens.shape
+        individual = self._render_character_tokens(tokens.reshape(batch * characters, 1, hidden))
+        _, channels, height, tile_width = individual.shape
+        return individual.view(batch, characters, channels, height, tile_width) \
+            .permute(0, 2, 3, 1, 4).reshape(batch, channels, height, characters * tile_width)
+
     def _decode_character_tokens(self, memory, query_tokens):
         """Run style fusion while using glyph identity plus word position as the query."""
         if self.use_feature_query_residual:
@@ -389,6 +397,10 @@ class Generator(nn.Module):
             self._render_character_tokens(layer_tokens)
             for layer_tokens in decoder_tokens
         ])
+        independent_layer_images = torch.stack([
+            self._render_character_tokens_independently(layer_tokens)
+            for layer_tokens in decoder_tokens
+        ])
 
         glyph_fn = getattr(self.query_embed, 'glyph_images', None)
         glyphs = glyph_fn(QR) if glyph_fn is not None else None
@@ -396,6 +408,7 @@ class Generator(nn.Module):
             'query_tokens': query_tokens,
             'decoder_tokens': decoder_tokens,
             'layer_images': layer_images,
+            'independent_layer_images': independent_layer_images,
             'layer_numbers': list(range(first + 1, hs.shape[0] + 1)),
             'glyphs': glyphs,
         }
