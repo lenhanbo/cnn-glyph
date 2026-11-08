@@ -10,6 +10,11 @@ import numpy as np
 import torch
 
 
+def get_query_mode(model) -> str:
+    """Return a checkpoint/logging name for both staged and original VATr queries."""
+    return getattr(model.netG.query_embed, "mode", "reference_baseline")
+
+
 def load_checkpoint_file(path, map_location=None):
     """Load trusted training state on both old and new PyTorch releases."""
     try:
@@ -58,7 +63,7 @@ def checkpoint_payload(model, epoch: int, global_step: int, scaler=None, schedul
     payload = {
         "model": model.state_dict(), "epoch": epoch, "global_step": global_step,
         "optimizers": [optimizer.state_dict() for optimizer in model.optimizers],
-        "rng_state": capture_rng_state(), "query_mode": model.netG.query_embed.mode,
+        "rng_state": capture_rng_state(), "query_mode": get_query_mode(model),
     }
     if scaler is not None:
         payload["scaler"] = scaler.state_dict()

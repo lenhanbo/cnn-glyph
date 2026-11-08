@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from models.feature_query import FeatureMapQuery
-from models.stage_manager import capture_rng_state, restore_rng_state, switch_generator_to_stage2
+from models.stage_manager import capture_rng_state, get_query_mode, restore_rng_state, switch_generator_to_stage2
 
 
 class TinyGenerator(nn.Module):
@@ -41,3 +41,10 @@ def test_rng_restore_normalizes_checkpoint_tensor_to_cpu_byte():
     state["torch"] = state["torch"].to(dtype=torch.int16)
     restore_rng_state(state)
     assert torch.get_rng_state().dtype == torch.uint8
+
+
+def test_original_vatr_query_reports_reference_baseline_without_mode_attribute():
+    model = nn.Module()
+    model.netG = nn.Module()
+    model.netG.query_embed = nn.Linear(4, 4)
+    assert get_query_mode(model) == "reference_baseline"

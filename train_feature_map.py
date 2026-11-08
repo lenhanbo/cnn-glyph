@@ -19,7 +19,10 @@ from PIL import Image, ImageDraw
 from data.dataset import TextDataset, TextDatasetval
 from data.raw_iam_dataset import RawIAMDataset
 from models.model import VATr, load_pretrained_ocr, load_pretrained_style_encoder
-from models.stage_manager import capture_rng_state, checkpoint_payload, load_checkpoint_file, restore_rng_state, switch_generator_to_stage2
+from models.stage_manager import (
+    capture_rng_state, checkpoint_payload, get_query_mode, load_checkpoint_file,
+    restore_rng_state, switch_generator_to_stage2,
+)
 from models.vocabulary import IAM_ALPHABET, SPECIAL_ALPHABET
 from util.pretrained import STYLE_ENCODER_FILENAME, ensure_pretrained_style_encoder
 
@@ -635,7 +638,8 @@ def main() -> None:
     mode = cfg.get("mode", "auto")
     resume_path = output / "latest.pth" if cli.resume == "auto" else (Path(cli.resume) if cli.resume else None)
     resume_header = load_checkpoint_file(resume_path, map_location="cpu") if resume_path and resume_path.exists() else None
-    initial_mode = "stage2" if resume_header and resume_header.get("query_mode") == "stage2" else mode
+    checkpoint_mode = resume_header.get("query_mode") if resume_header else None
+    initial_mode = checkpoint_mode if checkpoint_mode in {"reference_baseline", "stage1", "stage2"} else mode
     if mode == "stage2" and resume_header is None:
         # A fresh stage-2 run first loads/materializes its stage-1 checkpoint.
         initial_mode = "stage1"
@@ -716,7 +720,7 @@ def main() -> None:
         fixed_val = next(iter(val_loader))
         restore_rng_state(rng_state)
     for epoch in range(start_epoch, epochs):
-        if mode == "auto" and epoch == switch_epoch and model.netG.query_embed.mode == "stage1":
+        if mode == "auto" and epoch == switch_epoch and get_query_mode(model) == "stage1":
             switch_stage(model, output, epoch, global_step, scaler, scheduler, cfg)
         for batch_index, data in enumerate(train_loader):
             batch_started = time.perf_counter()
@@ -731,7 +735,7 @@ def main() -> None:
                         model.optimize_G_WL(); model.optimize_G_step()
                     elif phase == "d_writer":
                         model.optimize_D_WL(); model.optimize_D_WL_step()
-            if model.netG.query_embed.mode == "stage2":
+            if get_query_mode(model) == "stage2":
                 model.netG.query_embed.enforce_padding_zero()
             global_step += 1
             if (batch_index + 1) % log_every == 0 or batch_index == 0:
@@ -743,7 +747,7 @@ def main() -> None:
                 row = {
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "epoch": epoch + 1,
                     "batch": batch_index + 1, "batches": len(train_loader), "global_step": global_step,
-                    "query_mode": model.netG.query_embed.mode, "batch_seconds": f"{elapsed:.6f}",
+                    "query_mode": get_query_mode(model), "batch_seconds": f"{elapsed:.6f}",
                     "samples_per_second": f"{len(data['label']) / max(elapsed, 1e-9):.3f}",
                     "lr_g": model.optimizer_G.param_groups[0]["lr"],
                     "lr_d": model.optimizer_D.param_groups[0]["lr"],
@@ -755,7 +759,7 @@ def main() -> None:
                 metrics.write(row)
                 loss_text = " ".join(f"{name}={value:.4g}" for name, value in losses.items())
                 print(f"epoch={epoch + 1}/{epochs} batch={batch_index + 1}/{len(train_loader)} "
-                      f"step={global_step} query={model.netG.query_embed.mode} {loss_text} "
+                      f"step={global_step} query={get_query_mode(model)} {loss_text} "
                       f"sec={elapsed:.2f} gpu={gpu_memory:.0f}MB", flush=True)
             if cfg.get("max_batches_per_epoch") and batch_index + 1 >= int(cfg["max_batches_per_epoch"]):
                 break
@@ -775,7 +779,7 @@ def main() -> None:
             print(f"token_preview={token_preview_path}", flush=True)
         if next_epoch % int(cfg.get("save_every", 5)) == 0 or next_epoch == epochs:
             save(output / "latest.pth", model, next_epoch, global_step, scaler, scheduler, cfg)
-        print(f"epoch_complete={next_epoch}/{epochs} step={global_step} query={model.netG.query_embed.mode}", flush=True)
+        print(f"epoch_complete={next_epoch}/{epochs} step={global_step} query={get_query_mode(model)}", flush=True)
 
 
 if __name__ == "__main__":
