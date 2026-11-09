@@ -44,12 +44,16 @@ def training_phase(epoch: int, ocr_warmup_epochs: int) -> str:
 
 
 def optimization_plan(no_writer_loss: bool, batch_index: int, cfg: dict) -> tuple[str, ...]:
-    """Return the optimizer phases for one batch.
+    """Return optimizer phases using VATr's cadence unless explicitly overridden.
 
-    The writer-free ablation is a clean 1D:1G schedule. The writer-enabled
-    path preserves the original VATr cadence.
+    Original VATr executes the writer-named G/D branches even when their writer
+    terms are disabled; those branches still contain the adversarial objective.
+    Over two batches this gives 2 G updates and 4 D updates (1G:2D overall).
     """
-    if no_writer_loss:
+    schedule = cfg.get("training_schedule", "vatr")
+    if schedule not in {"vatr", "g-per-d"}:
+        raise ValueError(f"Unknown training_schedule={schedule!r}")
+    if schedule == "g-per-d" and no_writer_loss:
         g_steps = max(1, int(cfg.get("g_steps_per_d_step", 2)))
         return ("d_ocr",) + ("g_ocr",) * g_steps
     phases = []
@@ -408,6 +412,7 @@ class Args:
             tn_dim_feedforward=512, tn_enc_layers=3, tn_dec_layers=3, g_lr=5e-5, d_lr=5e-5,
             w_lr=5e-5, ocr_lr=5e-5, no_writer_loss=False, writer_loss_weight=1.0,
             no_ocr_loss=False, freeze_ocr=False, g_steps_per_d_step=2,
+            training_schedule="vatr",
             ocr_warmup_epochs=0,
             is_seq=True, num_words=3, is_cycle=False, is_kld=False,
             add_noise=False, all_chars=False,
@@ -418,6 +423,9 @@ class Args:
         self.alphabet = IAM_ALPHABET
         self.special_alphabet = SPECIAL_ALPHABET
         self.vocab_size = len(IAM_ALPHABET)
+        # G/D use character IDs 1..vocab_size while CTC additionally requires
+        # output index zero for blank.
+        self.ocr_num_classes = len(IAM_ALPHABET) + 1
         self.num_writers = num_writers
         self.feature_mode = mode
 
@@ -552,7 +560,9 @@ def main() -> None:
     parser.add_argument("--writer-loss-weight", type=float,
                         help="Scale the dynamically balanced writer objective; default 1.0")
     parser.add_argument("--g-steps-per-d-step", type=int,
-                        help="Generator updates after each discriminator update in writer-free mode")
+                        help="Generator updates per D update with --training-schedule g-per-d")
+    parser.add_argument("--training-schedule", choices=["vatr", "g-per-d"],
+                        help="VATr cadence (default) or the experimental writer-free G:D cadence")
     parser.add_argument("--ocr-warmup-epochs", type=int,
                         help="First N total epochs update only OCR on real IAM words")
     parser.add_argument("--ocr-checkpoint",
@@ -599,6 +609,7 @@ def main() -> None:
         "num_workers", "seed", "save_every", "log_every", "preview_every", "preview_samples",
         "token_preview_layers", "token_preview_samples", "token_preview_max_chars",
         "glyph_chunk_size", "device", "raw_group_by", "writer_loss_weight", "g_steps_per_d_step",
+        "training_schedule",
         "ocr_warmup_epochs",
         "forms_path", "feat_model_path", "ocr_checkpoint",
     )
@@ -671,13 +682,16 @@ def main() -> None:
         flush=True,
     )
     print(f"ocr_warmup_epochs={warmup_epochs} (included in total epochs)", flush=True)
+    schedule_text = (
+        "VATr (2G:4D per two batches)"
+        if args.training_schedule == "vatr"
+        else f"{args.g_steps_per_d_step}G:1D"
+    )
     print(
         f"writer_loss={'disabled' if args.no_writer_loss else 'enabled'} "
         f"weight={args.writer_loss_weight} "
         f"ocr={'frozen' if args.freeze_ocr else 'trainable'} "
-        f"G:D={args.g_steps_per_d_step}:1" if args.no_writer_loss else
-        f"writer_loss=enabled weight={args.writer_loss_weight} "
-        f"ocr={'frozen' if args.freeze_ocr else 'trainable'} schedule=VATr",
+        f"schedule={schedule_text}",
         flush=True,
     )
     if args.freeze_ocr and not cfg.get("ocr_checkpoint") and resume_header is None and mode != "stage2":

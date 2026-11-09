@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 
-from models.model import VATr, ctc_loss_fp32
+from models.model import VATr, ctc_loss_fp32, vatr_effective_objective
 
 
 def test_ctc_loss_is_forced_to_fp32_and_backpropagates_to_half_logits():
@@ -32,6 +32,19 @@ def test_active_generator_auxiliary_branches_backward_exactly_once():
     assert writer_source.count(".backward(") == 1
     assert "create_graph=True" not in ocr_source
     assert "create_graph=True" not in writer_source
+
+
+def test_single_objective_matches_vatr_three_backward_accumulation():
+    adv = torch.tensor(2.0, requires_grad=True)
+    aux = torch.tensor(5.0, requires_grad=True)
+    alpha = torch.tensor(0.25)
+
+    objective = vatr_effective_objective(adv, aux, alpha)
+    objective.backward()
+
+    assert objective.item() == 2.0 * 3.0 + 5.0 * (1.0 + 2.0 * 0.25)
+    assert adv.grad.item() == 3.0
+    assert aux.grad.item() == 1.5
 
 
 class _WarmupConverter:

@@ -39,7 +39,13 @@ def load_pretrained_style_encoder(encoder, checkpoint):
 
 
 def load_pretrained_ocr(ocr, checkpoint):
-    """Load only netOCR from either a full VATr or standalone OCR checkpoint."""
+    """Load OCR from a full VATr or standalone checkpoint.
+
+    Published/legacy VATr checkpoints used ``len(alphabet)`` CTC outputs even
+    though class zero is blank.  When loading one into the corrected
+    ``len(alphabet) + 1`` head, retain all legacy rows and leave only the new
+    final-character row at its normal initialization.
+    """
     state = checkpoint.get('model', checkpoint.get('state_dict', checkpoint))
     if not isinstance(state, dict):
         raise TypeError("OCR checkpoint must contain a state dictionary")
@@ -55,7 +61,22 @@ def load_pretrained_ocr(ocr, checkpoint):
         for key, value in state.items()
         if key.startswith('netOCR.')
     }
-    ocr_state = prefixed or state
+    ocr_state = dict(prefixed or state)
+    target_state = ocr.state_dict()
+    for key in ('linear.weight', 'linear.bias'):
+        if key not in ocr_state or key not in target_state:
+            continue
+        source_value = ocr_state[key]
+        target_value = target_state[key]
+        legacy_shape = (
+            source_value.ndim == target_value.ndim
+            and source_value.shape[0] + 1 == target_value.shape[0]
+            and source_value.shape[1:] == target_value.shape[1:]
+        )
+        if legacy_shape:
+            upgraded = target_value.detach().clone()
+            upgraded[:source_value.shape[0]].copy_(source_value)
+            ocr_state[key] = upgraded
     missing, unexpected = ocr.load_state_dict(ocr_state, strict=False)
     if missing or unexpected:
         raise RuntimeError(
@@ -69,6 +90,20 @@ def ctc_loss_fp32(criterion, predictions, targets, input_lengths, target_lengths
     with torch.autocast(device_type=predictions.device.type, enabled=False):
         log_probs = torch.nn.functional.log_softmax(predictions.float(), dim=2)
         return criterion(log_probs, targets, input_lengths, target_lengths)
+
+
+def vatr_effective_objective(adversarial, auxiliary=None, alpha=None, initial_aux_weight=1.0):
+    """Collapse VATr's three accumulated backwards into one equivalent loss.
+
+    Upstream first backpropagates ``G + initial_weight * aux`` and then
+    backpropagates ``G + alpha * aux`` twice.  A single backward through this
+    expression produces exactly the same accumulated gradient while making the
+    actual auxiliary contribution explicit.
+    """
+    objective = 3.0 * adversarial
+    if auxiliary is not None:
+        objective = objective + (initial_aux_weight + 2.0 * alpha) * auxiliary
+    return objective
 
 
 def get_rgb(x):
@@ -995,14 +1030,22 @@ class VATr(nn.Module):
             )[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_OCR))
             self.alpha_ocr = a.detach()
-            self.loss_OCR_fake = self.alpha_ocr * self.loss_OCR_fake_raw
-            self.loss_T = self.loss_G + self.loss_OCR_fake
-            self.loss_grad_fake_OCR = 10 ** 6 * torch.mean((self.alpha_ocr * grad_fake_OCR) ** 2)
+            # VATr accumulates one unweighted and two dynamically weighted
+            # OCR backwards. Express the same gradient with one backward so a
+            # vanishing adversarial gradient cannot silently remove content.
+            effective_ocr_weight = 1.0 + 2.0 * self.alpha_ocr
+            self.loss_OCR_fake = effective_ocr_weight * self.loss_OCR_fake_raw
+            self.loss_T = vatr_effective_objective(
+                self.loss_G, self.loss_OCR_fake_raw, self.alpha_ocr
+            )
+            self.loss_grad_fake_OCR = 10 ** 6 * torch.mean(
+                (effective_ocr_weight * grad_fake_OCR) ** 2
+            )
         else:
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, retain_graph=True)[0]
             a = self.loss_G.new_tensor(1.0)
             self.alpha_ocr = a.detach()
-            self.loss_T = self.loss_G
+            self.loss_T = vatr_effective_objective(self.loss_G)
 
         self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
 
@@ -1043,11 +1086,15 @@ class VATr(nn.Module):
             )[0]
             a = self.gb_alpha * torch.div(torch.std(grad_fake_adv), self.epsilon + torch.std(grad_fake_WL))
             self.alpha_w = a.detach()
-            self.loss_w_fake = (
-                self.alpha_w * self.loss_w_fake_raw * self.args.writer_loss_weight
+            # Upstream first uses writer_loss_weight, then performs two
+            # alpha-balanced backwards without that external multiplier.
+            effective_writer_weight = self.args.writer_loss_weight + 2.0 * self.alpha_w
+            self.loss_w_fake = effective_writer_weight * self.loss_w_fake_raw
+            self.loss_T = vatr_effective_objective(
+                self.loss_G, self.loss_w_fake_raw, self.alpha_w,
+                initial_aux_weight=self.args.writer_loss_weight,
             )
-            self.loss_T = self.loss_G + self.loss_w_fake
-            balanced_writer_grad = self.alpha_w * self.args.writer_loss_weight * grad_fake_WL
+            balanced_writer_grad = effective_writer_weight * grad_fake_WL
             self.loss_grad_fake_WL = 10 ** 6 * torch.mean(balanced_writer_grad ** 2)
         else:
             grad_fake_adv = torch.autograd.grad(self.loss_G, self.fake, retain_graph=True)[0]
@@ -1055,7 +1102,7 @@ class VATr(nn.Module):
             self.loss_w_fake_raw = self.loss_G.detach().new_zeros(())
             self.alpha_w = self.loss_G.detach().new_zeros(())
             self.loss_w_fake = self.loss_G.detach().new_zeros(())
-            self.loss_T = self.loss_G
+            self.loss_T = vatr_effective_objective(self.loss_G)
 
         self.loss_grad_fake_adv = 10 ** 6 * torch.mean(grad_fake_adv ** 2)
 

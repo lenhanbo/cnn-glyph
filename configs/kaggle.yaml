@@ -19,12 +19,13 @@ amp: true
 g_lr: 0.00005
 d_lr: 0.000025
 w_lr: 0.00005
-ocr_lr: 0.00005
+ocr_lr: 0.0001
 ocr_checkpoint: null
 freeze_ocr: false
-ocr_warmup_epochs: 0
+ocr_warmup_epochs: 50
 no_writer_loss: false
 writer_loss_weight: 1.0
+training_schedule: vatr
 g_steps_per_d_step: 2
 glyph_chunk_size: 128
 save_every: 5

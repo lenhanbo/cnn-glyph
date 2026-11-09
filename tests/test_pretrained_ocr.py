@@ -24,3 +24,28 @@ def test_load_pretrained_ocr_rejects_incompatible_checkpoint():
         assert "Incompatible OCR checkpoint" in str(error)
     else:
         raise AssertionError("incompatible OCR checkpoint was accepted")
+
+
+def test_load_pretrained_ocr_upgrades_legacy_ctc_classifier():
+    class TinyOCR(torch.nn.Module):
+        def __init__(self, outputs):
+            super().__init__()
+            self.linear = torch.nn.Linear(3, outputs)
+
+    source = TinyOCR(4)
+    target = TinyOCR(5)
+    new_row_before = target.linear.weight[-1].detach().clone()
+    new_bias_before = target.linear.bias[-1].detach().clone()
+    checkpoint = {
+        "model": {
+            f"netOCR.{key}": value.clone()
+            for key, value in source.state_dict().items()
+        }
+    }
+
+    load_pretrained_ocr(target, checkpoint)
+
+    torch.testing.assert_close(target.linear.weight[:4], source.linear.weight)
+    torch.testing.assert_close(target.linear.bias[:4], source.linear.bias)
+    torch.testing.assert_close(target.linear.weight[-1], new_row_before)
+    torch.testing.assert_close(target.linear.bias[-1], new_bias_before)

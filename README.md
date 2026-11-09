@@ -180,11 +180,11 @@ To train OCR on real IAM words before enabling GAN optimization:
 
 ```bash
 bash scripts/kaggle_run.sh stage1 --no-glyph-cnn --no-writer-loss \
-  --ocr-warmup-epochs 10 --g-steps-per-d-step 1 --no-amp \
-  --epochs 110 --output-dir /kaggle/working/vatr-ocr-warmup
+  --ocr-warmup-epochs 50 --no-amp \
+  --epochs 150 --output-dir /kaggle/working/vatr-ocr-warmup
 ```
 
-Warm-up occupies the first N total epochs (`--epochs 110` means 10 OCR-only
+Warm-up occupies the first N total epochs (`--epochs 150` means 50 OCR-only
 plus 100 GAN epochs). It always runs in FP32, updates only `netOCR` from real
 images, writes `phase=ocr_warmup` metrics, and saves
 `ocr_warmup_complete.pth` at the transition. It cannot be combined with a
@@ -198,9 +198,12 @@ bash scripts/kaggle_run.sh stage1 --epochs 100 --no-writer-loss \
 ```
 
 With writer loss disabled, `w_fake_raw`, `alpha_w`, `w_fake`, and `w_real` remain zero.
-By default every batch runs one `D + OCR_real` update followed by two
-`G_adv + alpha_ocr * OCR_fake_raw` updates, giving a writer-free G:D ratio of 2:1.
-Use `--g-steps-per-d-step N` to change this ratio.
+The default optimizer cadence is still VATr's original schedule: on even batches
+`G OCR -> D OCR -> G writer-branch -> D writer-branch`, and on odd batches
+`D OCR -> D writer-branch`. The writer branches retain their adversarial updates
+when writer loss is disabled, giving 2 G and 4 D updates per two batches. The old
+experimental schedule remains available with `--training-schedule g-per-d
+--g-steps-per-d-step N`.
 
 In feature-query modes, character identity is protected by two residual paths:
 the mean-pooled Lite CNN embedding is fused with a bias-free projection of the
@@ -225,10 +228,11 @@ throughput, batch time, stage, and CUDA memory) and prints the same values to th
 Kaggle console. Validation panels containing target text, the style reference,
 the real word, and the generated word are written to `OUTPUT/previews/epoch_XXXX.png`.
 `OCR_fake_raw` and `w_fake_raw` are the unweighted auxiliary losses;
-`alpha_ocr` and `alpha_w` are their dynamic gradient-balancing multipliers. The legacy
-`OCR_fake` and `w_fake` columns remain the corresponding post-multiplier values. The
-OCR and writer generator branches use `autograd.grad` only to measure these multipliers,
-then each accumulates generator gradients with exactly one balanced `backward()` call.
+`alpha_ocr` and `alpha_w` are their dynamic gradient-balancing multipliers. `OCR_fake`
+and `w_fake` report the complete effective auxiliary contributions. VATr originally
+accumulates three backwards per generator branch: one unweighted auxiliary pass and
+two alpha-balanced passes. This runner uses the mathematically equivalent single
+objective (`3*G + (1+2*alpha_ocr)*OCR_raw` for OCR), then calls `backward()` once.
 Per-character diagnostic tables are written to `OUTPUT/previews/tokens_epoch_XXXX.png`.
 They show the GNU glyph, query feature, and both feature/rendered output from the last
 decoder layers; `c=` is mean off-diagonal token cosine similarity, where values near 1

@@ -83,7 +83,18 @@ class CRNN(nn.Module):
                 BidirectionalLSTM(512, nh, nh),
                 BidirectionalLSTM(nh, nh, ))
         else:
-            self.linear = nn.Linear(512, self.args.vocab_size)
+            # CTC class zero is reserved for blank.  ``vocab_size`` is also
+            # consumed by G/D and deliberately excludes padding/blank, so OCR
+            # needs a separate output count: blank + every alphabet symbol.
+            ocr_num_classes = getattr(
+                self.args, 'ocr_num_classes', len(self.args.alphabet) + 1
+            )
+            if ocr_num_classes != len(self.args.alphabet) + 1:
+                raise ValueError(
+                    "ocr_num_classes must equal len(alphabet) + 1 "
+                    "(CTC blank plus all characters)"
+                )
+            self.linear = nn.Linear(512, ocr_num_classes)
 
         # replace all nan/inf in gradients to zero
         if dealwith_lossnone:
